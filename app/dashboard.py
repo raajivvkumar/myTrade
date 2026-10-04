@@ -288,14 +288,13 @@ def _live_tab() -> None:
             )
             tick_candles["volume"] = 0
             # Persist every live interval, including the still-forming candle.
-            save_candles_parquet(tick_candles, history_path)
-            # Keep a recent window visible while the complete chart history remains cached.
+            save_candles_parquet(tick_candles.tail(2), history_path)
+            # The parquet retains all bars; only the chart view is shortened below.
             plot_data = load_candles_parquet(history_path)
             plot_data["timestamp"] = _local_timestamps(plot_data["timestamp"])
             plot_data = (
                 plot_data.drop_duplicates(subset=["timestamp"], keep="last")
                 .sort_values("timestamp")
-                .tail(500)
                 .reset_index(drop=True)
             )
 
@@ -324,8 +323,8 @@ def _live_tab() -> None:
                 f"BUY/SELL markers appear only on EMA crossovers. Current feed: "
                 f'{"connected" if current_feed.connected else "disconnected"}.'
             )
-            chart_frame = plot_data.merge(
-                signalled[["timestamp", "ema_fast", "ema_slow", "signal"]],
+            chart_frame = plot_data.tail(500).merge(
+                signalled.tail(500)[["timestamp", "ema_fast", "ema_slow", "signal"]],
                 on="timestamp", how="left",
             )
             chart_frame["signal"] = chart_frame["signal"].fillna("HOLD")
