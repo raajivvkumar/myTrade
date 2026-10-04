@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+
+import pandas as pd
 from datetime import datetime
 from pathlib import Path
 
@@ -114,7 +116,20 @@ def cmd_download(settings: Settings, args: argparse.Namespace) -> None:
 def cmd_backtest(settings: Settings, args: argparse.Namespace) -> None:
     settings.ensure_local_directories()
     input_path = Path(args.input)
-    frame = load_candles_parquet(input_path)
+    if input_path.suffix.lower() == ".csv":
+        frame = pd.read_csv(input_path)
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+        for column in ("open", "high", "low", "close", "volume"):
+            if column in frame.columns:
+                frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame = (
+            frame.dropna(subset=["timestamp", "open", "close"])
+            .drop_duplicates(subset=["timestamp"], keep="last")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
+    else:
+        frame = load_candles_parquet(input_path)
 
     strategy_frame = generate_ema_crossover_signals(
         frame,
@@ -197,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
         "backtest",
         help="Backtest a deterministic strategy against locally cached candle data",
     )
-    backtest_parser.add_argument("--input", required=True, help="Path to a candle Parquet file")
+    backtest_parser.add_argument("--input", required=True, help="Path to a candle Parquet or OHLC CSV file")
     backtest_parser.add_argument("--fast", type=int, default=9, help="Fast EMA period")
     backtest_parser.add_argument("--slow", type=int, default=21, help="Slow EMA period")
     backtest_parser.add_argument("--capital", type=float, default=100000.0)
