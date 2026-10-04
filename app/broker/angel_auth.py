@@ -3,7 +3,6 @@
 Credentials are read from local environment variables at runtime. This module
 never logs or persists credential values or session tokens.
 """
-
 from __future__ import annotations
 
 import os
@@ -17,6 +16,7 @@ from SmartApi import SmartConnect
 class AngelMarketDataSession:
     client: SmartConnect
     feed_token: str
+    auth_token: str
 
 
 def connect_market_data() -> AngelMarketDataSession:
@@ -48,8 +48,13 @@ def connect_market_data() -> AngelMarketDataSession:
         message = response.get("message", "Authentication failed") if response else "Authentication failed"
         raise RuntimeError(f"Angel One authentication failed: {message}")
 
+    auth_token = (response.get("data") or {}).get("jwtToken")
     feed_token = client.getfeedToken()
-    if not feed_token:
-        raise RuntimeError("Angel One did not return a market-data feed token")
+    if not auth_token or not feed_token:
+        raise RuntimeError("Angel One did not return required market-data session tokens")
 
-    return AngelMarketDataSession(client=client, feed_token=feed_token)
+    return AngelMarketDataSession(
+        client=client,
+        feed_token=feed_token,
+        auth_token=auth_token,
+    )
