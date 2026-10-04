@@ -8,12 +8,13 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from app.ai.openai_client import OpenAIMarketAnalyst
+from app.backtest.engine import BacktestConfig, run_backtest
 from app.broker.angel_auth import connect_market_data
 from app.broker.angel_historical import get_candles
 from app.broker.instruments import load_instruments, search_instruments
 from app.config import Settings
-from app.data.storage import save_candles_parquet
+from app.data.storage import load_candles_parquet, save_candles_parquet
+from app.strategy.ema_crossover import generate_ema_crossover_signals
 
 
 def parse_datetime(value: str) -> datetime:
@@ -29,11 +30,6 @@ def cmd_status(settings: Settings) -> None:
     settings.ensure_local_directories()
     print("myTrade configuration")
     print(f"  data directory: {settings.data_dir}")
-    print(f"  OpenAI model: {settings.openai_model}")
-    print(
-        "  OPENAI_API_KEY: "
-        + ("configured" if os.getenv("OPENAI_API_KEY") else "optional / missing")
-    )
 
     angel_variables = (
         "ANGEL_API_KEY",
@@ -45,6 +41,7 @@ def cmd_status(settings: Settings) -> None:
     print(f"  Angel One local credentials: {configured}/{len(angel_variables)} configured")
     print("  Angel public instrument master: ready")
     print("  Angel historical candles: ready after local authentication")
+    print("  Deterministic backtesting engine: ready")
 
 
 def cmd_angel_login() -> None:
@@ -114,15 +111,50 @@ def cmd_download(settings: Settings, args: argparse.Namespace) -> None:
     print(frame.tail(5).to_string(index=False))
 
 
-def cmd_openai_test(settings: Settings) -> None:
-    analyst = OpenAIMarketAnalyst(model=settings.openai_model)
-    snapshot = {
-        "symbol": "TEST_ONLY",
-        "timeframe": "5m",
-        "trend": "unknown",
-        "note": "Connectivity test. No real market prediction requested.",
-    }
-    print(analyst.explain_snapshot(snapshot))
+def cmd_backtest(settings: Settings, args: argparse.Namespace) -> None:
+    settings.ensure_local_directories()
+    input_path = Path(args.input)
+    frame = load_candles_parquet(input_path)
+
+    strategy_frame = generate_ema_crossover_signals(
+        frame,
+        fast_period=args.fast,
+        slow_period=args.slow,
+        allow_short=args.allow_short,
+    )
+
+    config = BacktestConfig(
+        initial_capital=args.capital,
+        quantity=args.quantity,
+        fee_per_order=args.fee_per_order,
+        slippage_bps=args.slippage_bps,
+        allow_short=args.allow_short,
+    )
+    result = run_backtest(frame, strategy_frame["signal"], config)
+
+    print("myTrade backtest result")
+    print(f"  input: {input_path}")
+    print(f"  strategy: EMA crossover {args.fast}/{args.slow}")
+    print(f"  execution: signal on close -> next candle open")
+    print(json.dumps(result.metrics, indent=2))
+
+    output_dir = Path(args.output_dir) if args.output_dir else (
+        settings.data_dir
+        / "backtests"
+        / f"{input_path.stem}_ema_{args.fast}_{args.slow}"
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    result.trades_frame().to_csv(output_dir / "trades.csv", index=False)
+    result.equity_curve.to_csv(output_dir / "equity_curve.csv", index=False)
+    strategy_frame[["timestamp", "close", "ema_fast", "ema_slow", "signal"]].to_csv(
+        output_dir / "signals.csv",
+        index=False,
+    )
+    with (output_dir / "summary.json").open("w", encoding="utf-8") as handle:
+        json.dump(result.metrics, handle, indent=2)
+
+    print(f"Backtest artifacts saved to {output_dir}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -139,10 +171,6 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "angel-login",
         help="Verify local Angel One market-data authentication",
-    )
-    subparsers.add_parser(
-        "openai-test",
-        help="Optional: verify the OpenAI explanation layer",
     )
 
     find_parser = subparsers.add_parser(
@@ -165,6 +193,20 @@ def build_parser() -> argparse.ArgumentParser:
     download_parser.add_argument("--to", dest="to_dt", required=True, type=parse_datetime)
     download_parser.add_argument("--output", default=None)
 
+    backtest_parser = subparsers.add_parser(
+        "backtest",
+        help="Backtest a deterministic strategy against locally cached candle data",
+    )
+    backtest_parser.add_argument("--input", required=True, help="Path to a candle Parquet file")
+    backtest_parser.add_argument("--fast", type=int, default=9, help="Fast EMA period")
+    backtest_parser.add_argument("--slow", type=int, default=21, help="Slow EMA period")
+    backtest_parser.add_argument("--capital", type=float, default=100000.0)
+    backtest_parser.add_argument("--quantity", type=float, default=1.0)
+    backtest_parser.add_argument("--fee-per-order", type=float, default=0.0)
+    backtest_parser.add_argument("--slippage-bps", type=float, default=0.0)
+    backtest_parser.add_argument("--allow-short", action="store_true")
+    backtest_parser.add_argument("--output-dir", default=None)
+
     return parser
 
 
@@ -181,8 +223,8 @@ def main() -> None:
         cmd_find_instrument(settings, args)
     elif args.command == "download":
         cmd_download(settings, args)
-    elif args.command == "openai-test":
-        cmd_openai_test(settings)
+    elif args.command == "backtest":
+        cmd_backtest(settings, args)
     else:
         parser.error(f"Unknown command: {args.command}")
 
