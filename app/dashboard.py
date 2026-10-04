@@ -68,6 +68,17 @@ def _review_tab() -> None:
     if predictions.empty:
         st.info("No live signals have been recorded yet. Start a live chart to build this history.")
         return
+    scored = predictions[predictions["status"].isin(["PASSED", "FAILED"])]
+    passed = int((scored["status"] == "PASSED").sum())
+    failed = int((scored["status"] == "FAILED").sum())
+    summary = st.columns(4)
+    summary[0].metric("Signals recorded", len(predictions))
+    summary[1].metric("Passed", passed)
+    summary[2].metric("Failed", failed)
+    summary[3].metric(
+        "Directional accuracy",
+        f"{passed / len(scored) * 100:.1f}%" if len(scored) else "Pending",
+    )
     columns = [
         "id", "instrument", "interval", "timestamp", "signal", "status",
         "entry_close", "outcome_close", "outcome_return_pct", "outcome_reason",
