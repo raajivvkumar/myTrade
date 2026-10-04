@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from app.review.prediction_journal import PredictionJournal
 
@@ -36,7 +37,7 @@ def test_signal_is_logged_once_then_matured_and_reviewed(tmp_path) -> None:
     assert journal.evaluate_matured("NIFTY50", "FIVE_MINUTE", candles) == 1
     row = journal.list_predictions().iloc[0]
     assert row["status"] == "FAILED"
-    assert row["outcome_return_pct"] == -2.0
+    assert row["outcome_return_pct"] == pytest.approx(-2.0)
     assert "contradicted" in row["outcome_reason"]
 
     journal.save_review(
