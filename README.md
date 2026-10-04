@@ -381,17 +381,9 @@ The application must never log or expose:
 - refresh tokens
 - feed tokens
 
-## Cloudflare Callback
+## Cloudflare Access Tunnel
 
-The trading application itself will remain local.
-
-If Angel One requires an HTTPS redirect/callback during application registration, the project may use:
-
-```text
-https://mytrade.halovialabs.com/angel/callback
-```
-
-A minimal Cloudflare Worker can serve that endpoint. Trading logic, historical data, ML models and credentials will remain on the local machine.
+The dashboard remains a local Python application. Optional access at `https://mytrade.halovialabs.com` uses a Cloudflare Tunnel to the local Streamlit port and should be protected by a Cloudflare Access policy limited to your own verified email. Follow [cloudflare/README.md](cloudflare/README.md). Do not publish Angel One credentials or move trading logic into a public Worker.
 
 ## Safety Principles
 
@@ -405,7 +397,7 @@ A minimal Cloudflare Worker can serve that endpoint. Trading logic, historical d
 
 ## Current Status
 
-Python foundation, Angel One authentication and historical-data ingestion, deterministic backtesting, and a local live-signal/dashboard workflow are in place. Use the setup steps above to run the local app.
+Python foundation, Angel One authentication and historical-data ingestion, deterministic backtesting, and a local live-signal/dashboard workflow are in place. Candle history is stored locally, and live BUY/SELL signals are audited in a durable prediction journal.
 
 
 ## Local Dashboard, Backtesting, and Live Signals
@@ -443,3 +435,18 @@ Backtest decisions generated from a candle close execute at the next candle open
 ## OpenAI API Removal
 
 myTrade's analysis, chart signals, and backtesting run locally using Python and deterministic indicator logic. No OpenAI SDK, API key, or recurring AI API charge is required.
+
+
+### Supported market focus and trade review
+
+The instrument catalogue is restricted to **NIFTY 50**, **MIDCPNIFTY**, **BANKNIFTY**, and **MCX commodities**. Instrument tokens, expiries, and lot sizes are read from Angel One's current instrument master. You can choose a date range and download historical candles directly, or reuse chart history that has already been saved locally.
+
+Live chart candles are appended to `data/live/<exchange>/<token>/<interval>.parquet`. New live crossover calls are written to `data/mytrade_journal.sqlite3`, then classified after three completed candles as **PASSED**, **FAILED**, or **FLAT**. The Prediction Review tab shows the outcome and asks **“Why did I fail?”** and **“Why did I pass?”** so the explanation and next-step note remain with that call. The journal is local and persists between launches.
+
+### Simulated deposit and lots
+
+Backtests accept a simulated deposit of ₹10,000, ₹50,000, ₹1,00,000, or a custom amount. Quantity is calculated as:
+
+`unit multiplier × number of lots × units per lot`
+
+For a selected Angel One contract, units per lot default to the current instrument-master lot size. The editable brokerage assumption defaults to ₹20 per executed order for F&O and commodity trades, consistent with [Angel One's published pricing](https://www.angelone.in/exchange-transaction-charges). You can enter an additional per-lot/per-order cost and slippage. The current simulation does not calculate statutory taxes, exchange transaction fees, or margin requirements automatically; check the broker calculator and adjust the cost inputs before comparing results with a contract note.
