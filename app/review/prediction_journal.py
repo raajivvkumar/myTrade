@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 
@@ -116,21 +115,28 @@ class PredictionJournal:
                 direction_correct = (
                     change_pct > 0 if item["signal"] == "BUY" else change_pct < 0
                 )
+                direction_text = "up" if item["signal"] == "BUY" else "down"
                 if abs(change_pct) < 1e-12:
                     status = "FLAT"
-                    reason = "Price was unchanged over the evaluation window."
+                    reason = (
+                        f"Price stayed flat across the next {item['horizon_bars']} "
+                        "completed candles."
+                    )
                 elif direction_correct:
                     status = "PASSED"
                     reason = (
-                        f"{item['signal']} matched the next {item['horizon_bars']} "
-                        f"completed candles ({change_pct:+.3f}% close-to-close)."
+                        f"{item['signal']} expected price to move {direction_text}. "
+                        f"The fast/slow EMA crossover was recorded at ₹{entry:,.2f}; "
+                        f"price moved {change_pct:+.3f}% over the next "
+                        f"{item['horizon_bars']} completed candles."
                     )
                 else:
                     status = "FAILED"
                     reason = (
-                        f"{item['signal']} was contradicted by the next "
-                        f"{item['horizon_bars']} completed candles "
-                        f"({change_pct:+.3f}% close-to-close)."
+                        f"{item['signal']} expected price to move {direction_text}, "
+                        f"but the fast/slow EMA crossover was followed by a "
+                        f"{change_pct:+.3f}% move over the next "
+                        f"{item['horizon_bars']} completed candles."
                     )
                 connection.execute(
                     """UPDATE predictions SET status = ?, outcome_timestamp = ?,
