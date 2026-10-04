@@ -38,7 +38,7 @@ def test_signal_is_logged_once_then_matured_and_reviewed(tmp_path) -> None:
     row = journal.list_predictions().iloc[0]
     assert row["status"] == "FAILED"
     assert row["outcome_return_pct"] == pytest.approx(-2.0)
-    assert "contradicted" in row["outcome_reason"]
+    assert "but the fast/slow EMA crossover" in row["outcome_reason"]
 
     journal.save_review(
         int(row["id"]),
