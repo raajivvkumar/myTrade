@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import os
 import queue
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -318,32 +319,137 @@ def _live_tab() -> None:
 
 
 def _backtest_tab() -> None:
-    st.write("Upload historical OHLC candles as CSV, or run the CLI against a local Parquet file.")
-    uploaded = st.file_uploader("OHLC CSV", type=["csv"], key="backtest_csv")
-    if uploaded is None:
-        st.code(
-            "python -m pip install -r requirements.txt\n"
-            "python main.py backtest --input data/raw/NSE/99926000/FIVE_MINUTE.parquet "
-            "--fast 9 --slow 21 --capital 100000 --quantity 1",
-            language="bash",
+    st.write(
+        "Backtest NIFTY 50, MIDCPNIFTY, BANKNIFTY, or MCX history. "
+        "You can upload candles, choose chart history already collected, or download a date range."
+    )
+    source = st.selectbox(
+        "Historical data source",
+        ["Upload OHLC CSV", "Saved local history", "Download from Angel One"],
+    )
+    candles = None
+    selected_lot_size = 1
+    source_label = ""
+
+    if source == "Upload OHLC CSV":
+        uploaded = st.file_uploader("OHLC CSV", type=["csv"], key="backtest_csv")
+        if uploaded is not None:
+            try:
+                candles = _clean_candles(pd.read_csv(uploaded))
+                source_label = uploaded.name
+            except Exception as exc:
+                st.error(f"Could not read candle CSV: {exc}")
+                return
+
+    elif source == "Saved local history":
+        data_dir = Settings.from_env().data_dir
+        saved = sorted((data_dir / "live").rglob("*.parquet")) if (data_dir / "live").exists() else []
+        if not saved:
+            st.info("No saved live chart history yet. Connect a focused instrument first.")
+            return
+        selected_path = st.selectbox("Saved candle history", saved, format_func=lambda p: str(p.relative_to(data_dir)))
+        try:
+            candles = load_candles_parquet(selected_path)
+            source_label = str(selected_path.relative_to(data_dir))
+            pieces = selected_path.parts
+            selected_lot_size = 1
+            if len(pieces) > 2:
+                st.caption(f"Saved exchange/token path: {source_label}")
+        except Exception as exc:
+            st.error(f"Could not read saved candles: {exc}")
+            return
+
+    else:
+        focus = st.selectbox("Market group", FOCUS_MARKETS, key="history_focus")
+        try:
+            catalogue = _catalogue(focus)
+        except Exception as exc:
+            st.error(f"Could not load Angel One's instrument master: {exc}")
+            return
+        if not catalogue:
+            st.warning("No matching contracts found in the current Angel One instrument master.")
+            return
+        instrument = st.selectbox(
+            "Instrument to download",
+            catalogue,
+            format_func=instrument_label,
+            key="history_instrument",
         )
+        selected_lot_size = int(instrument.get("lotsize") or 1)
+        left, right = st.columns(2)
+        from_day = left.date_input("From date", value=date.today() - timedelta(days=30))
+        to_day = right.date_input("To date", value=date.today())
+        interval = st.selectbox(
+            "Candle interval",
+            ["ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE", "ONE_HOUR", "ONE_DAY"],
+            index=1,
+            key="history_interval",
+        )
+        if from_day >= to_day:
+            st.warning("The start date must be earlier than the end date.")
+        if st.button("Download and cache historical candles", type="primary", disabled=from_day >= to_day):
+            try:
+                with st.spinner("Downloading candles from Angel One…"):
+                    session = connect_market_data()
+                    candles = get_candles(
+                        session.client,
+                        exchange=str(instrument["exch_seg"]),
+                        symbol_token=str(instrument["token"]),
+                        interval=interval,
+                        from_datetime=datetime.combine(from_day, time(9, 0)),
+                        to_datetime=datetime.combine(to_day, time(23, 59)),
+                    )
+                    if candles.empty:
+                        raise ValueError("Angel One returned no candles for this range.")
+                    history_path = (
+                        Settings.from_env().data_dir / "live" / str(instrument["exch_seg"])
+                        / str(instrument["token"]) / f"{interval}.parquet"
+                    )
+                    save_candles_parquet(candles, history_path)
+                    st.session_state["last_history_download"] = str(history_path)
+                st.success(f"Cached {len(candles):,} candles at {history_path}")
+            except Exception as exc:
+                st.error(f"Historical download failed: {exc}")
+        last_path = st.session_state.get("last_history_download")
+        if last_path and Path(last_path).exists():
+            try:
+                candles = load_candles_parquet(Path(last_path))
+                source_label = str(Path(last_path).name)
+            except Exception as exc:
+                st.error(f"Could not load downloaded candles: {exc}")
+                return
+
+    if candles is None:
         return
 
-    try:
-        candles = _clean_candles(pd.read_csv(uploaded))
-    except Exception as exc:
-        st.error(f"Could not read candle CSV: {exc}")
-        return
-
+    st.caption(f"Data: {source_label or 'selected candles'} · {len(candles):,} rows")
     with st.form("backtest_settings"):
         a, b, c = st.columns(3)
         fast = a.number_input("Fast EMA", min_value=1, max_value=200, value=9)
         slow = b.number_input("Slow EMA", min_value=2, max_value=500, value=21)
-        capital = c.number_input("Initial capital", min_value=1.0, value=100000.0, step=10000.0)
+        deposit_choice = c.selectbox(
+            "Simulated deposit",
+            ["₹10,000", "₹50,000", "₹1,00,000", "Custom"],
+            index=2,
+        )
+        custom_deposit = c.number_input(
+            "Custom deposit amount (₹)", min_value=1.0, value=100000.0, step=10000.0
+        )
         d, e, f = st.columns(3)
-        quantity = d.number_input("Quantity", min_value=0.01, value=1.0, step=1.0)
-        fee = e.number_input("Fee per order", min_value=0.0, value=0.0, step=1.0)
-        slippage = f.number_input("Slippage (basis points)", min_value=0.0, value=0.0, step=1.0)
+        lots = d.number_input("Lots", min_value=1, max_value=1000, value=1, step=1)
+        lot_size = e.number_input(
+            "Units per lot", min_value=1, max_value=1000000,
+            value=int(selected_lot_size), step=1,
+            help="Loaded from Angel One's current instrument master where available. Editable for simulation."
+        )
+        brokerage = f.number_input(
+            "Brokerage per executed order (₹)", min_value=0.0, value=20.0, step=1.0
+        )
+        g, h = st.columns(2)
+        extra_per_lot = g.number_input(
+            "Additional charge per lot per order (₹)", min_value=0.0, value=0.0, step=1.0
+        )
+        slippage = h.number_input("Slippage (basis points)", min_value=0.0, value=0.0, step=1.0)
         allow_short = st.checkbox("Allow short positions", value=False)
         run = st.form_submit_button("Run backtest", type="primary")
 
@@ -351,9 +457,10 @@ def _backtest_tab() -> None:
         st.warning("Fast EMA must be shorter than Slow EMA.")
         return
     if not run:
-        st.caption(f"Loaded {len(candles):,} candles.")
         return
 
+    deposits = {"₹10,000": 10000.0, "₹50,000": 50000.0, "₹1,00,000": 100000.0}
+    deposit = float(custom_deposit) if deposit_choice == "Custom" else deposits[deposit_choice]
     strategy_frame = generate_ema_crossover_signals(
         candles, fast_period=int(fast), slow_period=int(slow), allow_short=allow_short
     )
@@ -361,37 +468,42 @@ def _backtest_tab() -> None:
         candles,
         strategy_frame["signal"],
         BacktestConfig(
-            initial_capital=float(capital),
-            quantity=float(quantity),
-            fee_per_order=float(fee),
+            initial_capital=deposit,
+            quantity=1.0,
+            lots=int(lots),
+            lot_size=int(lot_size),
+            fee_per_order=float(brokerage),
+            extra_charge_per_lot_order=float(extra_per_lot),
             slippage_bps=float(slippage),
             allow_short=allow_short,
         ),
     )
     metrics = result.metrics
+    st.caption(
+        f"Simulated deposit ₹{deposit:,.2f} · {int(lots)} lot(s) × "
+        f"{int(lot_size)} units · ₹{float(brokerage):.2f} brokerage/order. "
+        "This is a paper simulation balance; no funds are deposited."
+    )
     top = st.columns(4)
     top[0].metric("Net P&L", f"₹{metrics['net_pnl']:,.2f}")
-    top[1].metric("Return", f"{metrics['total_return_pct']:.2f}%")
+    top[1].metric("Final balance", f"₹{metrics['final_equity']:,.2f}")
     top[2].metric("Max drawdown", f"{metrics['max_drawdown_pct']:.2f}%")
     top[3].metric("Win rate", f"{metrics['win_rate_pct']:.2f}%")
     lower = st.columns(4)
     lower[0].metric("Trades", metrics["trades"])
-    lower[1].metric("Profit factor", str(metrics["profit_factor"]))
-    lower[2].metric("Average trade", f"₹{metrics['average_trade']:,.2f}")
+    lower[1].metric("Total charges", f"₹{metrics['total_charges']:,.2f}")
+    lower[2].metric("Profit factor", str(metrics["profit_factor"]))
     lower[3].metric("Max losing streak", metrics["max_consecutive_losses"])
 
     equity = result.equity_curve
     equity_fig = go.Figure(go.Scatter(
-        x=equity["timestamp"], y=equity["equity"], mode="lines", name="Equity"
+        x=equity["timestamp"], y=equity["equity"], mode="lines", name="Simulated balance"
     ))
-    equity_fig.update_layout(title="Backtest equity curve", height=340, template="plotly_white")
+    equity_fig.update_layout(title="Simulated balance history", height=340, template="plotly_white")
     st.plotly_chart(equity_fig, use_container_width=True)
 
     signals = generate_chart_signals(candles, fast_period=int(fast), slow_period=int(slow))
-    st.plotly_chart(
-        _chart(signals, title="EMA strategy signals"),
-        use_container_width=True,
-    )
+    st.plotly_chart(_chart(signals, title="EMA crossover signals"), use_container_width=True)
     st.subheader("Trades")
     st.dataframe(result.trades_frame(), use_container_width=True, hide_index=True)
     st.download_button(
@@ -400,7 +512,6 @@ def _backtest_tab() -> None:
         file_name="mytrade_trades.csv",
         mime="text/csv",
     )
-
 
 live_tab, backtest_tab, review_tab = st.tabs(
     ["Live chart and signals", "Backtesting", "Prediction review"]
