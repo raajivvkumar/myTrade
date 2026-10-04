@@ -141,7 +141,10 @@ def cmd_backtest(settings: Settings, args: argparse.Namespace) -> None:
     config = BacktestConfig(
         initial_capital=args.capital,
         quantity=args.quantity,
+        lots=args.lots,
+        lot_size=args.lot_size,
         fee_per_order=args.fee_per_order,
+        extra_charge_per_lot_order=args.extra_charge_per_lot_order,
         slippage_bps=args.slippage_bps,
         allow_short=args.allow_short,
     )
@@ -216,8 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument("--fast", type=int, default=9, help="Fast EMA period")
     backtest_parser.add_argument("--slow", type=int, default=21, help="Slow EMA period")
     backtest_parser.add_argument("--capital", type=float, default=100000.0)
-    backtest_parser.add_argument("--quantity", type=float, default=1.0)
-    backtest_parser.add_argument("--fee-per-order", type=float, default=0.0)
+    backtest_parser.add_argument("--quantity", type=float, default=1.0, help="Unit multiplier")
+    backtest_parser.add_argument("--lots", type=int, default=1)
+    backtest_parser.add_argument("--lot-size", type=int, default=1, help="Units per lot from the Angel instrument master")
+    backtest_parser.add_argument("--fee-per-order", type=float, default=20.0, help="Brokerage assumption per executed order in INR")
+    backtest_parser.add_argument("--extra-charge-per-lot-order", type=float, default=0.0)
     backtest_parser.add_argument("--slippage-bps", type=float, default=0.0)
     backtest_parser.add_argument("--allow-short", action="store_true")
     backtest_parser.add_argument("--output-dir", default=None)
