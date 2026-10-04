@@ -19,7 +19,7 @@ def test_index_focus_includes_only_requested_index_families() -> None:
     midcap = focus_instruments(master, "MIDCPNIFTY")
 
     assert {item["token"] for item in nifty} == {"1", "2"}
-    assert {item["token"] for item in bank} == {"4"}
+    assert {item["token"] for item in bank} == {"3", "4"}
     assert {item["token"] for item in midcap} == {"5", "6"}
 
 
