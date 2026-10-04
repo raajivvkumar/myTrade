@@ -376,6 +376,16 @@ def run_backtest(
         initial_capital=config.initial_capital,
         frame=data,
     )
+    metrics.update(
+        {
+            "lots": int(config.lots),
+            "lot_size": int(config.lot_size),
+            "units": float(units),
+            "brokerage_per_order": float(config.fee_per_order),
+            "extra_charge_per_lot_order": float(config.extra_charge_per_lot_order),
+            "slippage_bps": float(config.slippage_bps),
+        }
+    )
 
     return BacktestResult(
         config=config,
