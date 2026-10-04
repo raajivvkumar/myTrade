@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 import queue
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -18,7 +17,11 @@ from app.backtest.engine import BacktestConfig, run_backtest
 from app.broker.angel_auth import connect_market_data
 from app.broker.angel_historical import get_candles
 from app.broker.angel_live import AngelLiveFeed
+from app.broker.focus_universe import FOCUS_MARKETS, focus_instruments, instrument_label
+from app.broker.instruments import load_instruments
 from app.config import Settings
+from app.data.storage import load_candles_parquet, save_candles_parquet
+from app.review.prediction_journal import PredictionJournal
 from app.strategy.ema_crossover import generate_ema_crossover_signals
 from app.strategy.signal_engine import generate_chart_signals
 
@@ -30,6 +33,65 @@ st.info(
     "Signals are technical research outputs, not financial advice or guaranteed outcomes. "
     "This dashboard does not place orders."
 )
+
+
+
+def _catalogue(focus: str) -> list[dict]:
+    settings = Settings.from_env()
+    settings.ensure_local_directories()
+    path = settings.data_dir / "reference" / "angel_instruments.json"
+    instruments = load_instruments(path)
+    return focus_instruments(instruments, focus)
+
+
+def _journal() -> PredictionJournal:
+    settings = Settings.from_env()
+    return PredictionJournal(settings.data_dir / "mytrade_journal.sqlite3", horizon_bars=3)
+
+
+def _review_tab() -> None:
+    journal = _journal()
+    predictions = journal.list_predictions()
+    st.subheader("Prediction history and review")
+    st.caption(
+        "Every BUY/SELL crossover is stored locally and checked against the close "
+        "three completed candles later. Use both questions to review the result."
+    )
+    if predictions.empty:
+        st.info("No live signals have been recorded yet. Start a live chart to build this history.")
+        return
+    columns = [
+        "id", "instrument", "interval", "timestamp", "signal", "status",
+        "entry_close", "outcome_close", "outcome_return_pct", "outcome_reason",
+        "review_why_failed", "review_why_passed", "review_note",
+    ]
+    st.dataframe(predictions[columns], use_container_width=True, hide_index=True)
+    choices = predictions["id"].astype(int).tolist()
+    selected_id = st.selectbox("Signal to review", choices)
+    selected = predictions[predictions["id"] == selected_id].iloc[0]
+    st.write(
+        f"**{selected['instrument']} · {selected['signal']} · {selected['status']}** "
+        f"— {selected['outcome_reason'] or 'Outcome pending'}"
+    )
+    if selected["status"] == "PENDING":
+        st.info("This signal will be scored after three more completed candles.")
+        return
+    with st.form("prediction_review"):
+        why_failed = st.text_area("Why did I fail?", value=selected["review_why_failed"] or "")
+        why_passed = st.text_area("Why did I pass?", value=selected["review_why_passed"] or "")
+        note = st.text_area(
+            "What should I change or keep for the next signal?",
+            value=selected["review_note"] or "",
+        )
+        save = st.form_submit_button("Save review")
+    if save:
+        journal.save_review(
+            int(selected_id),
+            why_failed=why_failed,
+            why_passed=why_passed,
+            note=note,
+        )
+        st.success("Review saved to the local prediction journal.")
 
 
 def _chart(frame: pd.DataFrame, *, title: str, show_signals: bool = True) -> go.Figure:
@@ -88,9 +150,19 @@ def _clean_candles(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _live_tab() -> None:
     with st.form("live_settings"):
-        left, right = st.columns(2)
-        exchange = left.selectbox("Exchange segment", ["NSE", "NFO", "BSE", "BFO"])
-        symbol_token = right.text_input("Angel One symbol token")
+        focus = st.selectbox("Market group", FOCUS_MARKETS)
+        try:
+            catalogue = _catalogue(focus)
+        except Exception as exc:
+            catalogue = []
+            st.warning(f"Could not load Angel One's instrument master: {exc}")
+        selected_instrument = st.selectbox(
+            "Instrument (current Angel One master)",
+            catalogue,
+            format_func=instrument_label,
+            index=None if not catalogue else 0,
+            key="live_instrument_choice",
+        )
         interval = st.selectbox(
             "Chart candle interval",
             ["ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE"],
@@ -99,37 +171,49 @@ def _live_tab() -> None:
         start = st.form_submit_button("Connect and load chart", type="primary")
 
     if start:
-        if not symbol_token.strip():
-            st.error("Enter the numeric Angel One symbol token.")
+        if not selected_instrument:
+            st.error("Select a supported instrument from the current Angel One master.")
         else:
             try:
                 with st.spinner("Authenticating and loading recent candles…"):
                     session = connect_market_data()
                     now = datetime.now()
+                    exchange = str(selected_instrument["exch_seg"]).upper()
+                    symbol_token = str(selected_instrument["token"])
                     candles = get_candles(
                         session.client,
                         exchange=exchange,
-                        symbol_token=symbol_token.strip(),
+                        symbol_token=symbol_token,
                         interval=interval,
                         from_datetime=now - timedelta(days=2),
                         to_datetime=now,
                     )
                     if candles.empty:
                         raise ValueError("Angel One returned no historical candles.")
-                    exchange_types = {"NSE": 1, "NFO": 2, "BSE": 3, "BFO": 4}
+                    exchange_types = {"NSE": 1, "NFO": 2, "BSE": 3, "BFO": 4, "MCX": 5}
                     feed = AngelLiveFeed(
                         auth_token=session.auth_token,
                         api_key=os.environ["ANGEL_API_KEY"],
                         client_code=os.environ["ANGEL_CLIENT_CODE"],
                         feed_token=session.feed_token,
                         exchange_type=exchange_types[exchange],
-                        symbol_token=symbol_token.strip(),
+                        symbol_token=symbol_token,
                     )
                     feed.start()
+                    history_path = (
+                        Settings.from_env().data_dir / "live" / exchange / symbol_token
+                        / f"{interval}.parquet"
+                    )
+                    save_candles_parquet(candles, history_path)
                 st.session_state["live_feed"] = feed
-                st.session_state["live_history"] = candles
+                st.session_state["live_history_path"] = str(history_path)
                 st.session_state["live_interval"] = interval
-                st.session_state["live_instrument"] = f"{exchange}:{symbol_token.strip()}"
+                st.session_state["live_instrument"] = (
+                    f"{focus} · {selected_instrument.get('symbol') or selected_instrument.get('name')} "
+                    f"({exchange}:{symbol_token})"
+                )
+                st.session_state["live_lot_size"] = int(selected_instrument.get("lotsize") or 1)
+                st.session_state.pop("live_ticks", None)
                 st.success("Live market-data subscription started.")
             except Exception as exc:
                 st.error(f"Could not start live market data: {exc}")
@@ -147,9 +231,10 @@ def _live_tab() -> None:
     @st.fragment(run_every="2s")
     def live_panel() -> None:
         current_feed = st.session_state.get("live_feed")
-        history = st.session_state.get("live_history")
-        if current_feed is None or history is None:
+        history_path = st.session_state.get("live_history_path")
+        if current_feed is None or not history_path:
             return
+        history_path = Path(history_path)
 
         ticks = st.session_state.setdefault("live_ticks", [])
         while True:
@@ -162,7 +247,7 @@ def _live_tab() -> None:
         ticks = ticks[-20000:]
         st.session_state["live_ticks"] = ticks
 
-        plot_data = history.copy()
+        plot_data = load_candles_parquet(history_path)
         if ticks:
             tick_frame = pd.DataFrame(ticks)
             tick_frame["timestamp"] = pd.to_datetime(tick_frame["timestamp"], utc=True)
@@ -180,8 +265,10 @@ def _live_tab() -> None:
                 .reset_index()
             )
             tick_candles["volume"] = 0
-            # A tick-built candle replaces the broker candle for that timestamp.
-            plot_data = pd.concat([plot_data, tick_candles], ignore_index=True)
+            # Persist every live interval, including the still-forming candle.
+            save_candles_parquet(tick_candles, history_path)
+            # Keep a recent window visible while the complete chart history remains cached.
+            plot_data = load_candles_parquet(history_path)
             plot_data = (
                 plot_data.drop_duplicates(subset=["timestamp"], keep="last")
                 .sort_values("timestamp")
@@ -198,6 +285,9 @@ def _live_tab() -> None:
         instrument = st.session_state.get("live_instrument", "Live instrument")
         if len(completed) >= 3:
             signalled = generate_chart_signals(completed)
+            journal = _journal()
+            journal.record_signals(instrument, st.session_state["live_interval"], signalled)
+            journal.evaluate_matured(instrument, st.session_state["live_interval"], completed)
             last = signalled.iloc[-1]
             col1, col2, col3 = st.columns(3)
             col1.metric("Latest closed-candle signal", last["signal"])
@@ -218,6 +308,7 @@ def _live_tab() -> None:
             chart = _chart(plot_data, title=f"{instrument} • live candles", show_signals=False)
 
         st.plotly_chart(chart, use_container_width=True)
+        st.caption(f"Full candle history is being appended locally at {history_path}.")
         if ticks:
             st.caption(f"Latest live price: {float(ticks[-1]['price']):,.2f}")
         if not current_feed.connected:
@@ -311,8 +402,12 @@ def _backtest_tab() -> None:
     )
 
 
-live_tab, backtest_tab = st.tabs(["Live chart and signals", "Backtesting"])
+live_tab, backtest_tab, review_tab = st.tabs(
+    ["Live chart and signals", "Backtesting", "Prediction review"]
+)
 with live_tab:
     _live_tab()
 with backtest_tab:
     _backtest_tab()
+with review_tab:
+    _review_tab()
