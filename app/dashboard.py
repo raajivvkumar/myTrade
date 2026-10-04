@@ -379,10 +379,26 @@ def _backtest_tab() -> None:
             candles = load_candles_parquet(selected_path)
             candles["timestamp"] = _local_timestamps(candles["timestamp"])
             source_label = str(selected_path.relative_to(data_dir))
-            pieces = selected_path.parts
             selected_lot_size = 1
-            if len(pieces) > 2:
-                st.caption(f"Saved exchange/token path: {source_label}")
+            token = selected_path.parent.name
+            exchange = selected_path.parent.parent.name
+            master_path = data_dir / "reference" / "angel_instruments.json"
+            if master_path.exists():
+                master = load_instruments(master_path)
+                match = next(
+                    (
+                        item for item in master
+                        if str(item.get("token")) == token
+                        and str(item.get("exch_seg", "")).upper() == exchange.upper()
+                    ),
+                    None,
+                )
+                if match:
+                    selected_lot_size = int(match.get("lotsize") or 1)
+            st.caption(
+                f"Saved exchange/token: {exchange}:{token} · "
+                f"current lot size: {selected_lot_size}"
+            )
         except Exception as exc:
             st.error(f"Could not read saved candles: {exc}")
             return
