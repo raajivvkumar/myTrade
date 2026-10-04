@@ -14,15 +14,13 @@ load_dotenv()
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
-    openai_model: str
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
             data_dir=Path(os.getenv("MYTRADE_DATA_DIR", "data")),
-            openai_model=os.getenv("OPENAI_MODEL", "gpt-5"),
         )
 
     def ensure_local_directories(self) -> None:
-        for subdir in ("raw", "processed", "live", "reference"):
+        for subdir in ("raw", "processed", "live", "reference", "backtests"):
             (self.data_dir / subdir).mkdir(parents=True, exist_ok=True)
