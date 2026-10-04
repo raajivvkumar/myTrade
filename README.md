@@ -405,6 +405,41 @@ A minimal Cloudflare Worker can serve that endpoint. Trading logic, historical d
 
 ## Current Status
 
-Project foundation and architecture defined.
+Python foundation, Angel One authentication and historical-data ingestion, deterministic backtesting, and a local live-signal/dashboard workflow are in place. Use the setup steps above to run the local app.
 
-**Next milestone:** create the Python project skeleton and implement Angel One authentication plus historical-data ingestion.
+
+## Local Dashboard, Backtesting, and Live Signals
+
+A local dashboard is available for interactive backtesting and live chart research. It uses deterministic technical rules only; the application has no OpenAI API dependency.
+
+### Install and launch
+
+```bash
+python -m venv .venv
+# Windows PowerShell:
+.venv\Scripts\Activate.ps1
+# macOS/Linux:
+# source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+Copy `.env.example` to `.env` and enter Angel One credentials locally. Then start the dashboard bound to this computer:
+
+```bash
+streamlit run app/dashboard.py --server.address 127.0.0.1
+```
+
+The Live Chart tab loads recent Angel One candles, subscribes to the selected instrument through SmartAPI WebSocket V2, and displays a live candle chart. EMA crossover markers and the latest closed-candle signal are labeled **BUY**, **SELL**, or **HOLD**. The signal engine excludes the active, unfinished candle to avoid repainting. It provides research signals only and never submits orders.
+
+The Backtesting tab accepts historical OHLC CSV files and displays the equity curve, trade list, net P&L, return, drawdown, win rate, and profit factor. The CLI accepts either CSV or Parquet input:
+
+```bash
+python main.py backtest --input path/to/candles.csv --fast 9 --slow 21 --capital 100000 --quantity 1 --fee-per-order 20 --slippage-bps 5
+python -m pytest
+```
+
+Backtest decisions generated from a candle close execute at the next candle open. Fees and slippage are configurable. Backtests are simulations and can differ from actual fills and market conditions.
+
+## OpenAI API Removal
+
+myTrade's analysis, chart signals, and backtesting run locally using Python and deterministic indicator logic. No OpenAI SDK, API key, or recurring AI API charge is required.
