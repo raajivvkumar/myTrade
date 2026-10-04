@@ -53,14 +53,27 @@ def focus_instruments(
         if exchange not in {"NSE", "NFO"}:
             continue
         assert prefixes is not None
+        instrument_type = str(item.get("instrumenttype", "")).upper()
+        is_index_contract = instrument_type in {"FUTIDX", "OPTIDX"}
         if focus == "NIFTY 50":
-            # Avoid overlapping index families and sector indices.
-            if not any(value.startswith("NIFTY") for value in (symbol, name)):
+            # Cash index rows are exact matches. Derivative contracts are
+            # included by their exchange-provided FUTIDX/OPTIDX type.
+            is_nifty_cash = symbol in {"NIFTY", "NIFTY50"} or name in {"NIFTY", "NIFTY50"}
+            is_nifty_derivative = (
+                is_index_contract
+                and symbol.startswith("NIFTY")
+                and not any(part in combined for part in ("BANK", "MID", "FIN", "NEXT", "IT", "AUTO", "PHARMA"))
+            )
+            if not (is_nifty_cash or is_nifty_derivative):
                 continue
-            if any(part in combined for part in ("BANK", "MID", "FIN", "NEXT", "IT", "AUTO", "PHARMA")):
+        else:
+            is_focus_cash = any(symbol == prefix or name == prefix for prefix in prefixes)
+            is_focus_derivative = (
+                is_index_contract
+                and any(symbol.startswith(prefix) or name.startswith(prefix) for prefix in prefixes)
+            )
+            if not (is_focus_cash or is_focus_derivative):
                 continue
-        elif not any(symbol.startswith(prefix) or name.startswith(prefix) for prefix in prefixes):
-            continue
 
         if item.get("token"):
             results.append(item)
