@@ -6,6 +6,7 @@ Run from the repository root:
 from __future__ import annotations
 
 import os
+import queue
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -154,7 +155,7 @@ def _live_tab() -> None:
         while True:
             try:
                 ticks.append(current_feed.ticks.get_nowait())
-            except Exception:
+            except queue.Empty:
                 break
         # Keep a bounded tick history for the chart while preserving the
         # broker's historical candle window.
@@ -188,27 +189,30 @@ def _live_tab() -> None:
                 .reset_index(drop=True)
             )
 
-        # Only completed bars feed the signal engine. The newest bar may still
-        # be forming, so it is shown on the chart but excluded from signals.
-        completed = plot_data.iloc[:-1].copy() if len(plot_data) > 1 else plot_data.iloc[0:0].copy()
+        # Exclude the active interval from signals; retain it in the chart.
+        interval_rule = {"ONE_MINUTE": "1min", "FIVE_MINUTE": "5min", "FIFTEEN_MINUTE": "15min"}[
+            st.session_state["live_interval"]
+        ]
+        active_bar_start = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None).floor(interval_rule)
+        completed = plot_data[plot_data["timestamp"] < active_bar_start].copy()
         instrument = st.session_state.get("live_instrument", "Live instrument")
         if len(completed) >= 3:
             signalled = generate_chart_signals(completed)
-            fast = signalled["ema_fast"]
-            slow = signalled["ema_slow"]
-            signalled["signal"] = signalled["signal"].astype(str)
-            signalled["low"] = pd.to_numeric(signalled["low"], errors="coerce")
-            signalled["high"] = pd.to_numeric(signalled["high"], errors="coerce")
             last = signalled.iloc[-1]
             col1, col2, col3 = st.columns(3)
             col1.metric("Latest closed-candle signal", last["signal"])
-            col2.metric("Last close", f'{float(last["close"]):,.2f}')
+            col2.metric("Last closed price", f'{float(last["close"]):,.2f}')
             col3.metric("EMA spread strength", f'{float(last["strength_pct"]):.3f}%')
             st.caption(
                 f"BUY/SELL markers appear only on EMA crossovers. Current feed: "
                 f'{"connected" if current_feed.connected else "disconnected"}.'
             )
-            chart = _chart(signalled, title=f"{instrument} • closed-candle EMA signals")
+            chart_frame = plot_data.merge(
+                signalled[["timestamp", "ema_fast", "ema_slow", "signal"]],
+                on="timestamp", how="left",
+            )
+            chart_frame["signal"] = chart_frame["signal"].fillna("HOLD")
+            chart = _chart(chart_frame, title=f"{instrument} • live EMA signals")
         else:
             st.info("Waiting for enough completed candles to calculate a crossover.")
             chart = _chart(plot_data, title=f"{instrument} • live candles", show_signals=False)
