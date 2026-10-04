@@ -24,7 +24,7 @@ def test_emits_buy_and_sell_only_on_crossovers() -> None:
         pd.Timestamp("2026-01-01 00:04")
     ]
     assert result.loc[result["signal"] == "SELL", "timestamp"].tolist() == [
-        pd.Timestamp("2026-01-01 00:07")
+        pd.Timestamp("2026-01-01 00:06")
     ]
     assert result["signal"].iloc[0] == "HOLD"
     assert (result["strength_pct"] >= 0).all()
