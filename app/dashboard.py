@@ -37,6 +37,13 @@ st.info(
 
 
 
+def _local_timestamps(values: pd.Series) -> pd.Series:
+    parsed = pd.to_datetime(values, errors="coerce")
+    if isinstance(parsed.dtype, pd.DatetimeTZDtype):
+        return parsed.dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+    return parsed
+
+
 def _catalogue(focus: str) -> list[dict]:
     settings = Settings.from_env()
     settings.ensure_local_directories()
@@ -77,6 +84,7 @@ def _review_tab() -> None:
     if selected["status"] == "PENDING":
         st.info("This signal will be scored after three more completed candles.")
         return
+    st.markdown("#### Always ask: Why did I fail? Why did I pass?")
     with st.form("prediction_review"):
         why_failed = st.text_area("Why did I fail?", value=selected["review_why_failed"] or "")
         why_passed = st.text_area("Why did I pass?", value=selected["review_why_passed"] or "")
@@ -135,7 +143,7 @@ def _clean_candles(frame: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError("CSV is missing columns: " + ", ".join(sorted(missing)))
     result = frame.copy()
-    result["timestamp"] = pd.to_datetime(result["timestamp"], errors="coerce")
+    result["timestamp"] = _local_timestamps(result["timestamp"])
     for column in ("open", "high", "low", "close"):
         result[column] = pd.to_numeric(result[column], errors="coerce")
     result = (
@@ -191,6 +199,7 @@ def _live_tab() -> None:
                     )
                     if candles.empty:
                         raise ValueError("Angel One returned no historical candles.")
+                    candles["timestamp"] = _local_timestamps(candles["timestamp"])
                     exchange_types = {"NSE": 1, "NFO": 2, "BSE": 3, "BFO": 4, "MCX": 5}
                     feed = AngelLiveFeed(
                         auth_token=session.auth_token,
@@ -214,6 +223,7 @@ def _live_tab() -> None:
                     f"({exchange}:{symbol_token})"
                 )
                 st.session_state["live_lot_size"] = int(selected_instrument.get("lotsize") or 1)
+                st.session_state["live_started_at"] = datetime.now()
                 st.session_state.pop("live_ticks", None)
                 st.success("Live market-data subscription started.")
             except Exception as exc:
@@ -270,6 +280,7 @@ def _live_tab() -> None:
             save_candles_parquet(tick_candles, history_path)
             # Keep a recent window visible while the complete chart history remains cached.
             plot_data = load_candles_parquet(history_path)
+            plot_data["timestamp"] = _local_timestamps(plot_data["timestamp"])
             plot_data = (
                 plot_data.drop_duplicates(subset=["timestamp"], keep="last")
                 .sort_values("timestamp")
@@ -287,7 +298,11 @@ def _live_tab() -> None:
         if len(completed) >= 3:
             signalled = generate_chart_signals(completed)
             journal = _journal()
-            journal.record_signals(instrument, st.session_state["live_interval"], signalled)
+            live_start = pd.Timestamp(st.session_state.get("live_started_at", datetime.now()))
+            new_live_signals = signalled[signalled["timestamp"] >= live_start]
+            journal.record_signals(
+                instrument, st.session_state["live_interval"], new_live_signals
+            )
             journal.evaluate_matured(instrument, st.session_state["live_interval"], completed)
             last = signalled.iloc[-1]
             col1, col2, col3 = st.columns(3)
@@ -303,6 +318,7 @@ def _live_tab() -> None:
                 on="timestamp", how="left",
             )
             chart_frame["signal"] = chart_frame["signal"].fillna("HOLD")
+            chart_frame = chart_frame.tail(500)
             chart = _chart(chart_frame, title=f"{instrument} • live EMA signals")
         else:
             st.info("Waiting for enough completed candles to calculate a crossover.")
@@ -350,6 +366,7 @@ def _backtest_tab() -> None:
         selected_path = st.selectbox("Saved candle history", saved, format_func=lambda p: str(p.relative_to(data_dir)))
         try:
             candles = load_candles_parquet(selected_path)
+            candles["timestamp"] = _local_timestamps(candles["timestamp"])
             source_label = str(selected_path.relative_to(data_dir))
             pieces = selected_path.parts
             selected_lot_size = 1
@@ -401,6 +418,7 @@ def _backtest_tab() -> None:
                     )
                     if candles.empty:
                         raise ValueError("Angel One returned no candles for this range.")
+                    candles["timestamp"] = _local_timestamps(candles["timestamp"])
                     history_path = (
                         Settings.from_env().data_dir / "live" / str(instrument["exch_seg"])
                         / str(instrument["token"]) / f"{interval}.parquet"
@@ -414,6 +432,7 @@ def _backtest_tab() -> None:
         if last_path and Path(last_path).exists():
             try:
                 candles = load_candles_parquet(Path(last_path))
+                candles["timestamp"] = _local_timestamps(candles["timestamp"])
                 source_label = str(Path(last_path).name)
             except Exception as exc:
                 st.error(f"Could not load downloaded candles: {exc}")
