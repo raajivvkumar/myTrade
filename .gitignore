@@ -27,6 +27,10 @@ models/*.onnx
 *.sqlite
 *.sqlite3
 
+# Cloudflare local tunnel credentials/config
+cloudflare/config.yml
+cloudflare/*.json
+
 # Logs
 logs/
 *.log
