@@ -29,7 +29,10 @@ class BacktestConfig:
 
     initial_capital: float = 100_000.0
     quantity: float = 1.0
-    fee_per_order: float = 0.0
+    lots: int = 1
+    lot_size: int = 1
+    fee_per_order: float = 20.0
+    extra_charge_per_lot_order: float = 0.0
     slippage_bps: float = 0.0
     allow_short: bool = False
 
@@ -38,8 +41,14 @@ class BacktestConfig:
             raise ValueError("initial_capital must be greater than zero")
         if self.quantity <= 0:
             raise ValueError("quantity must be greater than zero")
+        if self.lots < 1 or self.lot_size < 1:
+            raise ValueError("lots and lot_size must be positive integers")
+        if int(self.lots) != self.lots or int(self.lot_size) != self.lot_size:
+            raise ValueError("lots and lot_size must be whole numbers")
         if self.fee_per_order < 0:
             raise ValueError("fee_per_order cannot be negative")
+        if self.extra_charge_per_lot_order < 0:
+            raise ValueError("extra_charge_per_lot_order cannot be negative")
         if self.slippage_bps < 0:
             raise ValueError("slippage_bps cannot be negative")
 
@@ -163,6 +172,7 @@ def _calculate_metrics(
     else:
         profit_factor = None
 
+    total_charges = float(sum(trade.fees for trade in trades))
     trade_count = len(trades)
     win_rate = (len(wins) / trade_count * 100.0) if trade_count else 0.0
     average_trade = (sum(net_results) / trade_count) if trade_count else 0.0
@@ -186,6 +196,7 @@ def _calculate_metrics(
         "initial_capital": round(initial_capital, 2),
         "final_equity": round(final_equity, 2),
         "net_pnl": round(net_pnl, 2),
+        "total_charges": round(total_charges, 2),
         "total_return_pct": round(total_return_pct, 4),
         "benchmark_buy_hold_pct": round(benchmark_return_pct, 4),
         "max_drawdown_pct": round(max_drawdown_pct, 4),
@@ -226,6 +237,10 @@ def run_backtest(
         len(data),
         allow_short=config.allow_short,
     )
+    units = config.quantity * config.lots * config.lot_size
+    charge_per_order = (
+        config.fee_per_order + config.extra_charge_per_lot_order * config.lots
+    )
 
     position = 0
     entry_price = 0.0
@@ -248,9 +263,9 @@ def run_backtest(
 
         order_side = "sell" if position == 1 else "buy"
         exit_price = _apply_slippage(raw_price, order_side, config.slippage_bps)
-        gross_pnl = position * (exit_price - entry_price) * config.quantity
-        realized_pnl += gross_pnl - config.fee_per_order
-        fees = config.fee_per_order * 2.0
+        gross_pnl = position * (exit_price - entry_price) * units
+        realized_pnl += gross_pnl - charge_per_order
+        fees = charge_per_order * 2.0
         net_pnl = gross_pnl - fees
         return_pct = (
             position * ((exit_price - entry_price) / entry_price) * 100.0
@@ -262,7 +277,7 @@ def run_backtest(
                 exit_time=timestamp,
                 entry_price=round(entry_price, 6),
                 exit_price=round(exit_price, 6),
-                quantity=config.quantity,
+                quantity=units,
                 gross_pnl=round(gross_pnl, 6),
                 fees=round(fees, 6),
                 net_pnl=round(net_pnl, 6),
@@ -288,7 +303,7 @@ def run_backtest(
             return
         order_side = "buy" if target == 1 else "sell"
         entry_price = _apply_slippage(raw_price, order_side, config.slippage_bps)
-        realized_pnl -= config.fee_per_order
+        realized_pnl -= charge_per_order
         position = target
         entry_time = timestamp
         entry_index = index
@@ -327,7 +342,7 @@ def run_backtest(
 
         close_price = float(row["close"])
         unrealized_pnl = (
-            position * (close_price - entry_price) * config.quantity
+            position * (close_price - entry_price) * units
             if position != 0
             else 0.0
         )
