@@ -43,6 +43,12 @@ def show_accuracy(records):
         cols[0].metric("Direction match", f'{summary["direction_accuracy_pct"]:.1f}%')
         cols[1].metric("Within saved tolerance", f'{summary["within_tolerance_pct"]:.1f}%')
         cols[2].metric("Previous-close baseline MAE", f'{summary["baseline_mae"]:.4f}')
+        scored_for_errors = records[records["status"] == "SCORED"]
+        st.dataframe(pd.DataFrame([
+            {"Candle price": column.upper(),
+             "Mean absolute error": float(scored_for_errors[column + "_absolute_error"].mean())}
+            for column in ("open", "high", "low", "close")
+        ]), hide_index=True, use_container_width=True)
         st.write("Model beats baseline on MAE." if summary["beats_baseline"] else
                  "Model has not beaten the previous-close baseline on MAE.")
         scored = records[records["status"] == "SCORED"].sort_values("actual_timestamp")
