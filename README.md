@@ -450,3 +450,46 @@ Backtests accept a simulated deposit of ₹10,000, ₹50,000, ₹1,00,000, or a 
 `unit multiplier × number of lots × units per lot`
 
 For a selected Angel One contract, units per lot default to the current instrument-master lot size. The editable brokerage assumption defaults to ₹20 per executed order for F&O and commodity trades, consistent with [Angel One's published pricing](https://www.angelone.in/exchange-transaction-charges). You can enter an additional per-lot/per-order cost and slippage. The current simulation does not calculate statutory taxes, exchange transaction fees, or margin requirements automatically; check the broker calculator and adjust the cost inputs before comparing results with a contract note.
+
+## Predicted candle accuracy and gamma highlighting
+
+The **Candle accuracy** tab measures an experimental rolling-drift next-interval
+OHLC forecast. It reports close MAE, RMSE, MAPE, direction match, and the percentage
+of closes within a saved tolerance (live default: 0.1%). A previous-close
+baseline is scored against the same targets. A high direction-match percentage
+does not mean predicted candle prices are accurate or trades profitable.
+
+Live forecasts use completed candles only and are saved once per instrument,
+interval, origin, and model. Refreshes cannot revise them. A target is scored
+only when its exact interval timestamp is present among completed candles.
+Missing target bars remain pending; a later bar cannot substitute for them.
+Forecast records include capture time: initial connection can capture a forecast
+during a forming target candle, so these records are not all pre-open forecasts.
+No historical forecasts are backfilled into the live journal.
+
+Historical OHLC replay separately runs causal rolling forecasts. It excludes
+missing-bar and session gaps and exposes predicted/actual OHLC plus price errors.
+These simulated results are not evidence of prospective live performance.
+Forecasts and existing EMA directional calls are separate models.
+
+**High gamma exposure** is option gamma × lot size × position lots. Gold table
+rows and gold chart diamonds identify values at or above the adjustable sidebar
+threshold. This is unsigned Greek exposure, not a profit multiplier or confidence
+score. Compare contracts on the same underlying and using the same gamma units.
+The current live feed does not supply gamma automatically.
+
+For an option contract, save a manual current broker gamma snapshot in the live
+tab. It expires after five minutes and is cleared when connecting a new contract.
+Each saved forecast or crossover retains the gamma snapshot and source that was
+available at capture time. Missing/expired gamma stays unknown and is not coloured.
+Backtest CSVs may include an `option_gamma` column captured at each signal candle;
+trade exposure uses the chosen simulation lot size and lots. Accuracy replay CSVs
+can also include `lot_size` and `lots` (default 1). Never apply current gamma to
+historical candles. The threshold is a user setting, not a recommended trade.
+
+Run the regression suite:
+
+```bash
+python -m pytest -q
+streamlit run app/dashboard.py --server.address 127.0.0.1
+```

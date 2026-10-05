@@ -43,6 +43,10 @@ class PredictionJournal:
         self.horizon_bars = horizon_bars
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(predictions)")}
+            for name, kind in (("gamma_exposure", "REAL"), ("gamma_source", "TEXT")):
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE predictions ADD COLUMN {name} {kind}")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
@@ -59,8 +63,8 @@ class PredictionJournal:
                 cursor = connection.execute(
                     """INSERT OR IGNORE INTO predictions
                     (instrument, interval, timestamp, signal, entry_close,
-                     ema_fast, ema_slow, strength_pct, horizon_bars)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     ema_fast, ema_slow, strength_pct, horizon_bars, gamma_exposure, gamma_source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         instrument,
                         interval,
@@ -71,6 +75,8 @@ class PredictionJournal:
                         float(row["ema_slow"]) if pd.notna(row["ema_slow"]) else None,
                         float(row["strength_pct"]) if pd.notna(row["strength_pct"]) else None,
                         self.horizon_bars,
+                        row.get("gamma_exposure"),
+                        row.get("gamma_source", "unavailable"),
                     ),
                 )
                 added += cursor.rowcount
