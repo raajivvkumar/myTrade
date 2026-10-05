@@ -23,12 +23,19 @@ from app.broker.instruments import load_instruments
 from app.config import Settings
 from app.data.storage import load_candles_parquet, save_candles_parquet
 from app.review.prediction_journal import PredictionJournal
+from app.review.accuracy_ui import accuracy_tab as render_accuracy_tab, journal as candle_journal, style_gamma
+from app.review.candle_accuracy import gamma_exposure
 from app.strategy.ema_crossover import generate_ema_crossover_signals
 from app.strategy.signal_engine import generate_chart_signals
 
 
 st.set_page_config(page_title="myTrade", page_icon="📈", layout="wide")
 st.title("myTrade")
+st.sidebar.number_input(
+    "High gamma exposure threshold", min_value=0.000001, value=0.01, format="%.6f",
+    key="gamma_threshold",
+    help="Option gamma × lot size × lots. Compare the same underlying and Greek units."
+)
 st.caption("Local market research, historical backtesting, and rule-based live signals.")
 st.info(
     "Signals are technical research outputs, not financial advice or guaranteed outcomes. "
@@ -82,9 +89,9 @@ def _review_tab() -> None:
     columns = [
         "id", "instrument", "interval", "timestamp", "signal", "status",
         "entry_close", "outcome_close", "outcome_return_pct", "outcome_reason",
-        "review_why_failed", "review_why_passed", "review_note",
+        "review_why_failed", "review_why_passed", "review_note", "gamma_exposure", "gamma_source",
     ]
-    st.dataframe(predictions[columns], use_container_width=True, hide_index=True)
+    st.dataframe(style_gamma(predictions[columns]), use_container_width=True, hide_index=True)
     choices = predictions["id"].astype(int).tolist()
     selected_id = st.selectbox("Signal to review", choices)
     selected = predictions[predictions["id"] == selected_id].iloc[0]
@@ -139,6 +146,15 @@ def _chart(frame: pd.DataFrame, *, title: str, show_signals: bool = True) -> go.
         figure.add_trace(go.Scatter(
             x=sells["timestamp"], y=sells["high"], mode="markers", name="SELL",
             marker={"symbol": "triangle-down", "size": 12, "color": "#c43c35"},
+        ))
+    if "gamma_exposure" in frame:
+        high_gamma = frame[
+            pd.to_numeric(frame["gamma_exposure"], errors="coerce").ge(st.session_state["gamma_threshold"])
+            & frame["signal"].isin(["BUY", "SELL"])
+        ]
+        figure.add_trace(go.Scatter(
+            x=high_gamma["timestamp"], y=high_gamma["close"], mode="markers",
+            name="High gamma exposure", marker={"symbol": "diamond", "size": 15, "color": "#d4a017"},
         ))
     figure.update_layout(
         title=title, xaxis_title="Time", yaxis_title="Price", height=580,
@@ -234,6 +250,8 @@ def _live_tab() -> None:
                     f"({exchange}:{symbol_token})"
                 )
                 st.session_state["live_lot_size"] = int(selected_instrument.get("lotsize") or 1)
+                st.session_state["live_is_option"] = "OPT" in str(selected_instrument.get("instrumenttype", "")).upper()
+                st.session_state.pop("gamma_snapshot", None)
                 st.session_state["live_started_at"] = datetime.now()
                 st.session_state.pop("live_ticks", None)
                 st.success("Live market-data subscription started.")
@@ -249,6 +267,19 @@ def _live_tab() -> None:
         feed.stop()
         st.session_state.pop("live_feed", None)
         st.rerun()
+
+    if st.session_state.get("live_is_option"):
+        with st.form("gamma_snapshot"):
+            st.caption("Enter actual broker option gamma for this contract. Snapshot expires after 5 minutes.")
+            option_gamma = st.number_input("Option gamma", min_value=0.0, value=0.0, format="%.6f")
+            gamma_lots = st.number_input("Position lots for gamma exposure", min_value=1, value=1)
+            gamma_save = st.form_submit_button("Save current broker gamma snapshot")
+        if gamma_save:
+            st.session_state["gamma_snapshot"] = {
+                "value": float(option_gamma), "lots": int(gamma_lots),
+                "captured_at": pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None),
+            }
+            st.success("Manual broker gamma saved for the selected contract.")
 
     @st.fragment(run_every="2s")
     def live_panel() -> None:
@@ -310,10 +341,40 @@ def _live_tab() -> None:
             journal = _journal()
             live_start = pd.Timestamp(st.session_state.get("live_started_at", datetime.now()))
             new_live_signals = signalled[signalled["timestamp"] >= live_start]
+            snapshot = st.session_state.get("gamma_snapshot")
+            gamma_value = None
+            gamma_lots = 1
+            gamma_source = "unavailable"
+            now_local = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
+            if snapshot and now_local - snapshot["captured_at"] <= pd.Timedelta(minutes=5):
+                gamma_value = snapshot["value"]
+                gamma_lots = snapshot["lots"]
+                gamma_source = "Manual broker snapshot at " + snapshot["captured_at"].isoformat()
+            exposure = gamma_exposure(gamma_value, st.session_state.get("live_lot_size", 1), gamma_lots)
+            new_live_signals = new_live_signals.copy()
+            # Apply the snapshot only to a recent completed signal candle.
+            new_live_signals["gamma_exposure"] = None
+            new_live_signals["gamma_source"] = "unavailable"
+            recent = new_live_signals["timestamp"] >= active_bar_start - pd.Timedelta(minutes=5)
+            new_live_signals.loc[recent, "gamma_exposure"] = exposure
+            new_live_signals.loc[recent, "gamma_source"] = gamma_source
             journal.record_signals(
                 instrument, st.session_state["live_interval"], new_live_signals
             )
             journal.evaluate_matured(instrument, st.session_state["live_interval"], completed)
+            forecasts = candle_journal()
+            forecasts.evaluate(instrument, st.session_state["live_interval"], completed)
+            minutes = {"ONE_MINUTE": 1, "FIVE_MINUTE": 5, "FIFTEEN_MINUTE": 15}[st.session_state["live_interval"]]
+            origin = pd.Timestamp(completed.iloc[-1]["timestamp"])
+            target = origin + pd.Timedelta(minutes=minutes)
+            # Save only a still-forming target; never backfill live predictions.
+            if len(completed) >= 11 and target == active_bar_start:
+                forecasts.record_latest(
+                    instrument, st.session_state["live_interval"], completed, minutes=minutes,
+                    option_gamma=gamma_value, lot_size=st.session_state.get("live_lot_size", 1),
+                    lots=gamma_lots, gamma_source=gamma_source,
+                )
+            st.caption("Gamma source: " + gamma_source)
             last = signalled.iloc[-1]
             col1, col2, col3 = st.columns(3)
             col1.metric("Latest closed-candle signal", last["signal"])
@@ -328,12 +389,42 @@ def _live_tab() -> None:
                 on="timestamp", how="left",
             )
             chart_frame["signal"] = chart_frame["signal"].fillna("HOLD")
+            saved_signals = journal.list_predictions(limit=5000)
+            if not saved_signals.empty:
+                gamma_rows = saved_signals[
+                    (saved_signals["instrument"] == instrument) &
+                    (saved_signals["interval"] == st.session_state["live_interval"])
+                ][["timestamp", "gamma_exposure"]].copy()
+                gamma_rows["timestamp"] = pd.to_datetime(gamma_rows["timestamp"])
+                chart_frame = chart_frame.merge(gamma_rows.drop_duplicates("timestamp"), on="timestamp", how="left")
             chart_frame = chart_frame.tail(500)
             chart = _chart(chart_frame, title=f"{instrument} • live EMA signals")
         else:
             st.info("Waiting for enough completed candles to calculate a crossover.")
             chart = _chart(plot_data, title=f"{instrument} • live candles", show_signals=False)
 
+        stored = candle_journal().list_records()
+        if not stored.empty:
+            matching = stored[
+                (stored["instrument"] == instrument) &
+                (stored["interval"] == st.session_state["live_interval"]) &
+                (stored["target_timestamp"] == active_bar_start.isoformat())
+            ]
+            if not matching.empty:
+                prediction = matching.iloc[0]
+                exposure_value = prediction.get("gamma_exposure")
+                high_gamma = pd.notna(exposure_value) and float(exposure_value) >= st.session_state["gamma_threshold"]
+                forecast_color = "#d4a017" if high_gamma else "#3979c6"
+                chart.add_trace(go.Candlestick(
+                    x=[pd.Timestamp(prediction["target_timestamp"])],
+                    open=[prediction["predicted_open"]], high=[prediction["predicted_high"]],
+                    low=[prediction["predicted_low"]], close=[prediction["predicted_close"]],
+                    name="Experimental predicted candle",
+                    increasing_line_color=forecast_color, decreasing_line_color=forecast_color,
+                    increasing_fillcolor="rgba(57,121,198,0.15)",
+                    decreasing_fillcolor="rgba(57,121,198,0.15)",
+                ))
+                st.metric("Experimental next candle close", f'{prediction["predicted_close"]:,.4f}')
         st.plotly_chart(chart, use_container_width=True)
         st.caption(f"Full candle history is being appended locally at {history_path}.")
         if ticks:
@@ -550,20 +641,33 @@ def _backtest_tab() -> None:
     signals = generate_chart_signals(candles, fast_period=int(fast), slow_period=int(slow))
     st.plotly_chart(_chart(signals, title="EMA crossover signals"), use_container_width=True)
     st.subheader("Trades")
-    st.dataframe(result.trades_frame(), use_container_width=True, hide_index=True)
+    trade_display = result.trades_frame()
+    if not trade_display.empty:
+        exposures = []
+        for entry in pd.to_datetime(trade_display["entry_time"]):
+            prior = candles[pd.to_datetime(candles["timestamp"]) < entry]
+            raw = prior.iloc[-1].get("option_gamma") if not prior.empty else None
+            exposures.append(gamma_exposure(
+                float(raw) if raw is not None and pd.notna(raw) else None, int(lot_size), int(lots),
+            ))
+        trade_display["gamma_exposure"] = exposures
+        trade_display["gamma_source"] = "CSV at signal candle" if "option_gamma" in candles else "unavailable"
+    st.dataframe(style_gamma(trade_display), use_container_width=True, hide_index=True)
     st.download_button(
         "Download trades CSV",
-        result.trades_frame().to_csv(index=False).encode("utf-8"),
+        trade_display.to_csv(index=False).encode("utf-8"),
         file_name="mytrade_trades.csv",
         mime="text/csv",
     )
 
-live_tab, backtest_tab, review_tab = st.tabs(
-    ["Live chart and signals", "Backtesting", "Prediction review"]
+live_tab, backtest_tab, accuracy_tab, review_tab = st.tabs(
+    ["Live chart and signals", "Backtesting", "Candle accuracy", "Prediction review"]
 )
 with live_tab:
     _live_tab()
 with backtest_tab:
     _backtest_tab()
+with accuracy_tab:
+    render_accuracy_tab()
 with review_tab:
     _review_tab()
