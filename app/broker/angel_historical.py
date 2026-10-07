@@ -1,16 +1,17 @@
 """Historical candle retrieval through Angel One SmartAPI.
 
 Authentication is intentionally kept separate from this module. Pass an
-already-authenticated SmartConnect client when calling get_candles().
+already-authenticated client when calling get_candles(). This module has no
+SmartAPI import so offline history/backtests never trigger broker-side network
+work during import.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 
 import pandas as pd
-from SmartApi import SmartConnect
 
 
 SUPPORTED_INTERVALS: Final[set[str]] = {
@@ -35,7 +36,7 @@ CANDLE_COLUMNS: Final[list[str]] = [
 
 
 def get_candles(
-    client: SmartConnect,
+    client: Any,
     *,
     exchange: str,
     symbol_token: str,
@@ -63,9 +64,15 @@ def get_candles(
 
     response = client.getCandleData(params)
     if not response or not response.get("status"):
-        message = response.get("message", "Unknown historical-data error") if response else "Empty response"
+        message = (
+            response.get("message", "Unknown historical-data error")
+            if response
+            else "Empty response"
+        )
         error_code = response.get("errorcode", "") if response else ""
-        raise RuntimeError(f"Angel historical request failed: {error_code} {message}".strip())
+        raise RuntimeError(
+            f"Angel historical request failed: {error_code} {message}".strip()
+        )
 
     rows = response.get("data") or []
     frame = pd.DataFrame(rows, columns=CANDLE_COLUMNS)
