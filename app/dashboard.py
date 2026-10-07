@@ -6,6 +6,7 @@ Run from the repository root:
 from __future__ import annotations
 
 import os
+import json
 import queue
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -15,12 +16,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app.backtest.engine import BacktestConfig, run_backtest
-from app.broker.angel_auth import connect_market_data
-from app.broker.angel_historical import get_candles
-from app.broker.angel_live import AngelLiveFeed
 from app.broker.focus_universe import FOCUS_MARKETS, focus_instruments, instrument_label
 from app.broker.instruments import load_instruments
 from app.config import Settings
+from app.data.archive import contract_id
+from app.data.archive_ui import archive, select_history, history_tab
 from app.data.storage import load_candles_parquet, save_candles_parquet
 from app.review.prediction_journal import PredictionJournal
 from app.review.accuracy_ui import accuracy_tab as render_accuracy_tab, journal as candle_journal, style_gamma
@@ -55,7 +55,8 @@ def _catalogue(focus: str) -> list[dict]:
     settings = Settings.from_env()
     settings.ensure_local_directories()
     path = settings.data_dir / "reference" / "angel_instruments.json"
-    instruments = load_instruments(path)
+    # Reading saved history must not require network access or an active broker.
+    instruments = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
     return focus_instruments(instruments, focus)
 
 
@@ -185,6 +186,11 @@ def _clean_candles(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _live_tab() -> None:
+    if st.button("Refresh current broker catalogue"):
+        try:
+            load_instruments(Settings.from_env().data_dir / "reference" / "angel_instruments.json", force_refresh=True)
+        except Exception as exc:
+            st.error(f"Catalogue refresh failed: {exc}")
     with st.form("live_settings"):
         focus = st.selectbox("Market group", FOCUS_MARKETS)
         try:
@@ -212,6 +218,9 @@ def _live_tab() -> None:
         else:
             try:
                 with st.spinner("Authenticating and loading recent candles…"):
+                    from app.broker.angel_auth import connect_market_data
+                    from app.broker.angel_historical import get_candles
+                    from app.broker.angel_live import AngelLiveFeed
                     session = connect_market_data()
                     now = datetime.now()
                     exchange = str(selected_instrument["exch_seg"]).upper()
@@ -236,12 +245,14 @@ def _live_tab() -> None:
                         exchange_type=exchange_types[exchange],
                         symbol_token=symbol_token,
                     )
+                    archive().save(selected_instrument, interval, candles, source="angel-historical")
                     feed.start()
                     history_path = (
-                        Settings.from_env().data_dir / "live" / exchange / symbol_token
+                        Settings.from_env().data_dir / "live" / exchange / contract_id(selected_instrument)
                         / f"{interval}.parquet"
                     )
                     save_candles_parquet(candles, history_path)
+                st.session_state["live_contract_metadata"] = dict(selected_instrument)
                 st.session_state["live_feed"] = feed
                 st.session_state["live_history_path"] = str(history_path)
                 st.session_state["live_interval"] = interval
@@ -318,6 +329,16 @@ def _live_tab() -> None:
                 .reset_index()
             )
             tick_candles["volume"] = 0
+            # The tick feed does not provide reliable per-bar volume here.
+            archived_ticks = tick_candles.copy()
+            archived_ticks["volume"] = None
+            archived_ticks["quality"] = "partial tick reconstruction; volume unavailable"
+            try:
+                archive().save(st.session_state["live_contract_metadata"],
+                               st.session_state["live_interval"], archived_ticks.tail(3),
+                               source="angel-live-ticks")
+            except Exception as exc:
+                st.error(f"History archive write failed: {exc}")
             # Persist every live interval, including the still-forming candle.
             save_candles_parquet(tick_candles.tail(2), history_path)
             # The parquet retains all bars; only the chart view is shortened below.
@@ -442,7 +463,7 @@ def _backtest_tab() -> None:
     )
     source = st.selectbox(
         "Historical data source",
-        ["Upload OHLC CSV", "Saved local history", "Download from Angel One"],
+        ["Upload OHLC CSV", "Permanent contract archive", "Saved local history", "Download from Angel One"],
     )
     candles = None
     selected_lot_size = 1
@@ -458,6 +479,13 @@ def _backtest_tab() -> None:
                 st.error(f"Could not read candle CSV: {exc}")
                 return
 
+    elif source == "Permanent contract archive":
+        item, candles = select_history("backtest_archive")
+        if item is None:
+            return
+        selected_lot_size = int(item["lotsize"])
+        source_label = f"{item['symbol']} · expiry {item['expiry']} · {item['interval']}"
+
     elif source == "Saved local history":
         data_dir = Settings.from_env().data_dir
         saved = sorted((data_dir / "live").rglob("*.parquet")) if (data_dir / "live").exists() else []
@@ -470,25 +498,9 @@ def _backtest_tab() -> None:
             candles["timestamp"] = _local_timestamps(candles["timestamp"])
             source_label = str(selected_path.relative_to(data_dir))
             selected_lot_size = 1
-            token = selected_path.parent.name
-            exchange = selected_path.parent.parent.name
-            master_path = data_dir / "reference" / "angel_instruments.json"
-            if master_path.exists():
-                master = load_instruments(master_path)
-                match = next(
-                    (
-                        item for item in master
-                        if str(item.get("token")) == token
-                        and str(item.get("exch_seg", "")).upper() == exchange.upper()
-                    ),
-                    None,
-                )
-                if match:
-                    selected_lot_size = int(match.get("lotsize") or 1)
-            st.caption(
-                f"Saved exchange/token: {exchange}:{token} · "
-                f"current lot size: {selected_lot_size}"
-            )
+            st.warning("Legacy token-only history has no verified historical contract metadata. "
+                       "Verify units per lot below. Import it in Contract history with its original metadata "
+                       "to preserve the expired contract identity.")
         except Exception as exc:
             st.error(f"Could not read saved candles: {exc}")
             return
@@ -524,6 +536,9 @@ def _backtest_tab() -> None:
         if st.button("Download and cache historical candles", type="primary", disabled=from_day >= to_day):
             try:
                 with st.spinner("Downloading candles from Angel One…"):
+                    from app.broker.angel_auth import connect_market_data
+                    from app.broker.angel_historical import get_candles
+                    from app.broker.angel_live import AngelLiveFeed
                     session = connect_market_data()
                     candles = get_candles(
                         session.client,
@@ -538,8 +553,9 @@ def _backtest_tab() -> None:
                     candles["timestamp"] = _local_timestamps(candles["timestamp"])
                     history_path = (
                         Settings.from_env().data_dir / "live" / str(instrument["exch_seg"])
-                        / str(instrument["token"]) / f"{interval}.parquet"
+                        / contract_id(instrument) / f"{interval}.parquet"
                     )
+                    archive().save(instrument, interval, candles, source="angel-historical")
                     save_candles_parquet(candles, history_path)
                     st.session_state["last_history_download"] = str(history_path)
                 st.success(f"Cached {len(candles):,} candles at {history_path}")
@@ -660,8 +676,8 @@ def _backtest_tab() -> None:
         mime="text/csv",
     )
 
-live_tab, backtest_tab, accuracy_tab, review_tab = st.tabs(
-    ["Live chart and signals", "Backtesting", "Candle accuracy", "Prediction review"]
+live_tab, backtest_tab, accuracy_tab, review_tab, history_view = st.tabs(
+    ["Live chart and signals", "Backtesting", "Candle accuracy", "Prediction review", "Contract history"]
 )
 with live_tab:
     _live_tab()
@@ -671,3 +687,6 @@ with accuracy_tab:
     render_accuracy_tab()
 with review_tab:
     _review_tab()
+
+with history_view:
+    history_tab()

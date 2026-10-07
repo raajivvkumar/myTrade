@@ -19,7 +19,7 @@ __pycache__/
 Thumbs.db
 
 # Local trading data and trained models
-data/
+/data/
 models/*.joblib
 models/*.pkl
 models/*.onnx
