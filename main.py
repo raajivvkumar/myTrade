@@ -11,10 +11,9 @@ from datetime import datetime
 from pathlib import Path
 
 from app.backtest.engine import BacktestConfig, run_backtest
-from app.broker.angel_auth import connect_market_data
-from app.broker.angel_historical import get_candles
 from app.broker.instruments import load_instruments, search_instruments
 from app.config import Settings
+from app.data.archive import HistoryArchive, contract_id
 from app.data.storage import load_candles_parquet, save_candles_parquet
 from app.strategy.ema_crossover import generate_ema_crossover_signals
 
@@ -47,6 +46,7 @@ def cmd_status(settings: Settings) -> None:
 
 
 def cmd_angel_login() -> None:
+    from app.broker.angel_auth import connect_market_data
     session = connect_market_data()
     print("Angel One market-data authentication successful.")
     print("Session/feed tokens received in memory; values are intentionally hidden.")
@@ -85,7 +85,20 @@ def cmd_find_instrument(settings: Settings, args: argparse.Namespace) -> None:
 
 
 def cmd_download(settings: Settings, args: argparse.Namespace) -> None:
+    from app.broker.angel_auth import connect_market_data
+    from app.broker.angel_historical import get_candles
     settings.ensure_local_directories()
+    if args.contract_json:
+        instrument = json.loads(Path(args.contract_json).read_text(encoding="utf-8"))
+    else:
+        master = load_instruments(settings.data_dir / "reference" / "angel_instruments.json")
+        instrument = next((row for row in master if str(row.get("token")) == str(args.token)
+                           and str(row.get("exch_seg", "")).upper() == args.exchange.upper()), None)
+    if instrument is None:
+        raise ValueError("Contract absent from current master. Supply original --contract-json metadata.")
+    if str(instrument.get("token")) != str(args.token) or str(instrument.get("exch_seg", "")).upper() != args.exchange.upper():
+        raise ValueError("Contract metadata does not match requested exchange/token.")
+    identity = contract_id(instrument)
     session = connect_market_data()
 
     frame = get_candles(
@@ -104,9 +117,11 @@ def cmd_download(settings: Settings, args: argparse.Namespace) -> None:
         settings.data_dir
         / "raw"
         / args.exchange.upper()
-        / str(args.token)
+        / identity
         / f"{args.interval.upper()}.parquet"
     )
+    HistoryArchive(settings.data_dir / "archive" / "history.sqlite3").save(
+        instrument, args.interval.upper(), frame, source="angel-historical")
     save_candles_parquet(frame, output)
 
     print(f"Saved {len(frame)} candles to {output}")
@@ -175,6 +190,32 @@ def cmd_backtest(settings: Settings, args: argparse.Namespace) -> None:
     print(f"Backtest artifacts saved to {output_dir}")
 
 
+def cmd_history(settings: Settings, args: argparse.Namespace) -> None:
+    history = HistoryArchive(settings.data_dir / "archive" / "history.sqlite3")
+    if args.action == "list":
+        print(json.dumps(history.catalogue(), indent=2))
+    elif args.action == "import":
+        if not args.input or not args.contract_json:
+            raise ValueError("history import requires --input CSV and --contract-json")
+        identity = history.save(json.loads(Path(args.contract_json).read_text(encoding="utf-8")),
+                                args.interval, pd.read_csv(args.input), source=args.source)
+        print(f"Archived contract: {identity}")
+    elif args.action == "export":
+        if not args.contract_id or not args.output:
+            raise ValueError("history export requires --contract-id and --output")
+        frame = history.load(args.contract_id, args.interval)
+        if frame.empty:
+            raise ValueError("No saved candles for this contract/interval")
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(output, index=False)
+        print(f"Exported {len(frame)} candles to {output}")
+    elif args.action == "backup":
+        if not args.output:
+            raise ValueError("history backup requires --output pointing to a new file")
+        print(history.backup(Path(args.output)))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="myTrade",
@@ -210,6 +251,16 @@ def build_parser() -> argparse.ArgumentParser:
     download_parser.add_argument("--from", dest="from_dt", required=True, type=parse_datetime)
     download_parser.add_argument("--to", dest="to_dt", required=True, type=parse_datetime)
     download_parser.add_argument("--output", default=None)
+    download_parser.add_argument("--contract-json", help="Original contract metadata when no longer listed")
+
+    archive_parser = subparsers.add_parser("history", help="Offline contract archive: list, import, export or backup")
+    archive_parser.add_argument("action", choices=["list", "import", "export", "backup"])
+    archive_parser.add_argument("--input")
+    archive_parser.add_argument("--contract-json")
+    archive_parser.add_argument("--contract-id")
+    archive_parser.add_argument("--interval", default="FIVE_MINUTE")
+    archive_parser.add_argument("--source", default="manual CSV import")
+    archive_parser.add_argument("--output")
 
     backtest_parser = subparsers.add_parser(
         "backtest",
@@ -244,6 +295,8 @@ def main() -> None:
         cmd_find_instrument(settings, args)
     elif args.command == "download":
         cmd_download(settings, args)
+    elif args.command == "history":
+        cmd_history(settings, args)
     elif args.command == "backtest":
         cmd_backtest(settings, args)
     else:

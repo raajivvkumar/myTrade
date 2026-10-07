@@ -17,6 +17,6 @@ def test_dashboard_and_saved_accuracy_view(monkeypatch, tmp_path):
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app" / "dashboard.py").run(timeout=30)
     assert not app.exception
     assert [tab.label for tab in app.tabs] == [
-        "Live chart and signals", "Backtesting", "Candle accuracy", "Prediction review",
+        "Live chart and signals", "Backtesting", "Candle accuracy", "Prediction review", "Contract history",
     ]
     assert any(metric.label == "Close MAE" for metric in app.metric)

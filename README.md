@@ -493,3 +493,65 @@ Run the regression suite:
 python -m pytest -q
 streamlit run app/dashboard.py --server.address 127.0.0.1
 ```
+
+## Permanent option history (including expired contracts)
+
+The Python dashboard's **Contract history** tab stores a separate durable SQLite
+archive at `MYTRADE_DATA_DIR/archive/history.sqlite3` (default
+`data/archive/history.sqlite3`). Expiry and removal from Angel One's current
+instrument master never delete archived candles. Contract identity includes
+exchange, symbol, expiry, original strike and instrument type, so recycled broker
+tokens cannot mix different expiries. Original metadata, historical lot size,
+data source and capture time are retained. There is no automatic expiry cleanup.
+
+- Use **Refresh current broker catalogue** before selecting a new live contract.
+  Connecting a live contract and downloading history automatically archive the
+  completed candles retrieved. Live tick-derived completed bars are archived
+  while the dashboard runs, marked as partial reconstruction with unknown volume.
+  They do not replace better broker/import candles.
+- Overlapping downloads merge by contract/interval/timestamp. Empty responses do
+  not erase history; changed observations retain their earlier values in a revision
+  table. Forming candles are excluded from the permanent archive.
+- Use **Backtesting → Permanent contract archive** without a broker login or a
+  current instrument catalogue. Historical lot size comes from saved metadata.
+  **Contract history → Measure archived candle accuracy** runs historical replay.
+- Import old OHLC CSV plus original contract JSON in **Contract history**. Optional
+  OI, IV and Greeks columns remain as supplied; a candle API does not magically
+  recover unavailable Greeks. Naive timestamps are interpreted as India time.
+- Export CSV and metadata JSON for reuse, or download a complete SQLite backup.
+  Store backups on a separate disk. With the app stopped, restore by copying the
+  backup to `MYTRADE_DATA_DIR/archive/history.sqlite3` (keep the current file first).
+  The backup covers this history archive, not the separate prediction journal.
+
+Example metadata JSON (replace all values with the original contract's values;
+`strike` retains the source's units rather than guessing a conversion):
+
+```json
+{"exch_seg":"NFO","token":"ORIGINAL_TOKEN","symbol":"ORIGINAL_OPTION_SYMBOL_PE",
+ "name":"NIFTY","expiry":"2026-10-27","strike":"ORIGINAL_STRIKE_VALUE",
+ "lotsize":"65","instrumenttype":"OPTIDX"}
+```
+
+Offline Bash commands:
+
+```bash
+python main.py history list
+python main.py history import --input old_option.csv --contract-json contract.json --interval FIVE_MINUTE --source "Original broker CSV"
+python main.py history export --contract-id CONTRACT_ID_FROM_LIST --interval FIVE_MINUTE --output exports/expired_option.csv
+python main.py backtest --input exports/expired_option.csv --lot-size HISTORICAL_LOT_SIZE
+python main.py history backup --output backups/history-2026-10-07.sqlite3
+```
+
+Existing token-only Parquet files are preserved, but cannot be assigned safely to
+an expired contract from today's potentially recycled token. Import them with
+verified original metadata (convert to CSV first). New Parquet paths use the
+contract identity instead of only the token.
+
+This collects selected contracts, not every option on the exchange. The app must
+be running and connected to capture live data, or candles must be downloaded
+before the provider removes them. Data already removed and never saved requires
+an available external historical file/source. Local disk loss is still possible,
+so keep independent backups. Archived datasets support future research and model
+validation; this change does not automatically retrain a model or promise improved
+predictions. The separately hosted Candle Lab is not synchronized with this local
+Python archive; exported CSVs can be loaded there.
