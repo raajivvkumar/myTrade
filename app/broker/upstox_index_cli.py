@@ -49,6 +49,11 @@ def build_parser():
     parser.add_argument("--max-windows", type=int, default=1,
                         help="Safety limit for executed requests; default=1")
     parser.add_argument("--pause-seconds", type=float, default=1.0)
+    parser.add_argument("--backup-dir", type=Path,
+                        default=Path("../MyTradeOfflineArchive/upstox_index_v3"),
+                        help="Automatic offline mirror for each download")
+    parser.add_argument("--skip-backup", action="store_true",
+                        help="Disable automatic secondary local copy")
     return parser
 
 
@@ -102,6 +107,10 @@ def run(args):
         target.with_suffix(".json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
         print(f"Saved {len(frame)} candles: {target}")
+        if not getattr(args, "skip_backup", False):
+            from app.data.market_archive import backup_local
+            mirrored = backup_local(root, args.backup_dir)
+            print(f"Offline mirror verified: {mirrored['pairs']} files at {args.backup_dir}")
 
 
 def main():

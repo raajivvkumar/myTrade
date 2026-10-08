@@ -569,3 +569,8 @@ After manual token setup, use Upstox Plus and add --execute to fetch a small sam
 ## Upstox Basic: FREE historical NIFTY index candles (Analytics Token)
 
 Without switching to Plus, you can start NIFTY 1-minute **underlying index** research using Upstox's one-year free read-only Analytics Token and Historical Candle V3. First preview has no network: `python -m app.broker.upstox_index_cli --from-date 2026-03-23 --to-date 2026-03-24`. After setting `UPSTOX_ANALYTICS_TOKEN` in your local `.env`, add `--execute` for one GET-only sample. Index OHLC is **not** expired option premium data; do not compute options Gamma Multiplier returns from this alone. Read [Basic Analytics setup](docs/UPSTOX_ANALYTICS.md). The Upstox Plus importer remains separate.
+
+
+## Broker-independent private 1-minute data archive
+
+Successful Upstox Analytics V3 index downloads now automatically create a second independent local mirror at ../MyTradeOfflineArchive/upstox_index_v3 with immutable Parquet, JSON provenance and SHA256 catalogue. Run python -m app.data.market_archive verify without an Upstox login, and optionally upload via privately configured rclone Google Drive. Instructions: docs/MARKET_DATA_ARCHIVE.md. The Google Drive folder is https://drive.google.com/drive/folders/1jH6SgOQJdt9pwF1XCWPMxiGfm9otRWVf . Currently no live data has been downloaded, and this index source is NOT historical option-contract premiums.
