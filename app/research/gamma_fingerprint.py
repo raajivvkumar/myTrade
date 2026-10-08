@@ -65,6 +65,8 @@ def _ohlc(frame: pd.DataFrame, *, check_identity: bool = False) -> pd.DataFrame:
         f[col] = pd.to_numeric(f[col], errors="coerce")
     if f[list(REQUIRED_OHLC)].isna().any().any():
         raise ValueError("Null/non-numeric OHLC or timestamp")
+    if not np.isfinite(f[list(REQUIRED_OHLC[1:])].to_numpy(dtype=float)).all():
+        raise ValueError("Non-finite OHLC price")
     if (f[list(REQUIRED_OHLC[1:])] <= 0).any().any():
         raise ValueError("Nonpositive OHLC")
     if ((f.low > f[["open", "close"]].min(axis=1)) |
@@ -114,7 +116,10 @@ def index_precursors(index_bars: pd.DataFrame,
         ).round(3)
         g["directional_bars_5m"] = bars_aligned.fillna(0).astype(int)
         g["direction"] = np.where(ret5 > 0, "UP", "DOWN")
-        g["eligible"] = continuous_lookback & g[[
+        # Ordinary full NSE trading session only; special sessions need
+        # independent calendar validation before any research signal.
+        regular_session = g.timestamp.dt.time.between(time(9, 15), MARKET_CLOSE_BAR)
+        g["eligible"] = continuous_lookback & regular_session & g[[
             "move_5m_bps", "range_ratio", "abs_return_ratio"
         ]].notna().all(axis=1)
         g["condition_move"] = g.move_5m_bps.abs().ge(rules.move_5m_bps)
@@ -151,7 +156,7 @@ def _exact_option(option_bars: pd.DataFrame) -> pd.DataFrame:
         if f[name].isna().any() or f[name].nunique(dropna=False) != 1:
             raise ValueError(f"Mixed or missing contract identity: {name}")
     key = str(f.instrument_key.iloc[0])
-    if not key.startswith("NSE_FO|") or str(f.symbol.iloc[0]).upper().startswith("NIFTY") is False:
+    if not key.startswith("NSE_FO|") or not str(f.symbol.iloc[0]).upper().startswith("NIFTY"):
         raise ValueError("Only actual NIFTY F&O contracts supported")
     side = f.option_type.iloc[0]
     if side not in ("CE", "PE"):
@@ -161,7 +166,10 @@ def _exact_option(option_bars: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("Contract has candles after expiry")
     strike = pd.to_numeric(f.strike_price, errors="coerce")
     lots = pd.to_numeric(f.lot_size, errors="coerce")
-    if strike.isna().any() or (strike <= 0).any() or lots.isna().any() or (lots < 1).any():
+    if (strike.isna().any() or not np.isfinite(strike.to_numpy(dtype=float)).all()
+            or (strike <= 0).any() or lots.isna().any()
+            or not np.isfinite(lots.to_numpy(dtype=float)).all()
+            or (lots < 1).any() or (lots % 1 != 0).any()):
         raise ValueError("Invalid strike or lot size")
     for name in ("volume", "oi"):
         f[name] = pd.to_numeric(f[name], errors="coerce")
@@ -197,7 +205,9 @@ def evaluate_contract(features: pd.DataFrame, option_bars: pd.DataFrame,
     f = _exact_option(option_bars)
     side = f.option_type.iloc[0]
     wanted = "UP" if side == "CE" else "DOWN"
-    option_map = f.set_index("timestamp", verify_integrity=True)
+    option_map = f.set_index("timestamp")
+    if not option_map.index.is_unique:
+        raise ValueError("Duplicate option candle timestamps")
     labels = []
     for row in features.loc[features.eligible & features.direction.eq(wanted)].itertuples():
         t = row.timestamp
