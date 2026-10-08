@@ -11,6 +11,7 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
+import re
 
 from app.research.gamma_lab import exact_contract_observations
 
@@ -160,7 +161,7 @@ def _control_near(case: pd.Series, options: pd.DataFrame) -> pd.Series:
 def _source_identity(frame: pd.DataFrame, *, file_number: int) -> str:
     if "symbol" in frame.columns:
         symbols = frame.symbol.dropna().astype(str).str.upper().unique()
-        if len(symbols) != 1 or not symbols[0].startswith("NIFTY"):
+        if len(symbols) != 1 or re.match(r"^NIFTY(?=\s|\d)", symbols[0]) is None:
             raise ValueError(f"Contract file {file_number}: symbol must identify NIFTY")
     for key in ("instrument_key", "strike_price", "option_type", "expiry"):
         if key not in frame or frame[key].isna().any() or frame[key].nunique(dropna=False) != 1:
@@ -248,12 +249,22 @@ def investigate_events(
         raise ValueError("min_events_for_review must be positive")
     all_windows = []
     seen = set()
+    instrument_registry: dict[str, tuple[str, str, str]] = {}
     supplied = 0
     for n, frame in enumerate(contracts, 1):
         supplied += 1
         if not isinstance(frame, pd.DataFrame) or frame.empty:
             raise ValueError(f"Contract file {n} is empty/invalid")
         identity = _source_identity(frame, file_number=n)
+        key = str(frame["instrument_key"].iloc[0])
+        contract_signature = (
+            str(frame["strike_price"].iloc[0]),
+            str(frame["option_type"].iloc[0]),
+            str(frame["expiry"].iloc[0]),
+        )
+        if key in instrument_registry and instrument_registry[key] != contract_signature:
+            raise ValueError(f"Recycled instrument key across contracts: {key}")
+        instrument_registry[key] = contract_signature
         if identity in seen:
             raise ValueError(f"Repeated contract input {identity}; combine its bars first")
         seen.add(identity)
