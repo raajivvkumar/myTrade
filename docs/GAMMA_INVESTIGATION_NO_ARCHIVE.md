@@ -60,3 +60,40 @@ Run in Windows Git Bash from the project root:
 Dry run is network-free; execute makes exactly one read-only GET. The terminal prints summary counts and at most six gamma-sensitive research-watch contracts, using real contract identity. It cannot place any order and writes no market history. Actual returned expiries are printed; exchange quote timestamps and completeness cannot be inferred from request time. If outside trading hours, displayed quotes can be stale.
 
 If you see HTTP 401/403 or an empty chain, first check that the freshly rotated Analytics Token is saved privately in UPSTOX_ANALYTICS_TOKEN and the requested expiry is valid. Never share a token, account password, or complete .env. You can share only redacted terminal output or counts for troubleshooting.
+
+
+## Repeatability study across actual fixed-contract option CSVs
+
+The third 3x/5x/10x events vs non-events tab runs
+app.research.gamma_event_study.investigate_events on multiple uploads IN MEMORY,
+with no file writing, no database, no JEV and no saved market history.
+
+- Upload one actual NIFTY CE/PE fixed-strike/expiry contract per CSV.
+- Exactly the same instrument key + strike + side + expiry is required through
+  each file; the same contract cannot occur twice in the batch.
+- Each candidate decision timestamp t needs 60 prior contiguous regular-session
+  bars and a COMPLETE future 30m (configurable) path in the same session.
+- The entry benchmark is the NEXT minute OPEN, and the label is maximal
+  future minute CLOSE / that entry. These 3x/5x/10x retrospective opportunity
+  labels are NOT realized executable profits or evidence Gamma caused the rally.
+- Deduplicate positive episodes whose decision windows overlap.
+- Compare them with actual observed <3x controls from the SAME fixed option
+  contract and same day within two hours and with entry premium between 0.5x
+  and 2x of the case. Censor controls near ANY positive episode; never
+  fabricate an unmatched control.
+- Candidate pre-event features: option price returns, OI changes, Gamma/Delta/IV/
+  Theta changes over 5, 15, 30, 60 minutes, recent volume vs preceding 30 minutes,
+  plus spread/moneyness if supplied. Missing historical Greeks remain MISSING.
+- Frozen descriptive hypotheses: volume surge >=2x; premium 5m momentum >=20%;
+  OI rise >=10% in 5m; IV increasing over 5m; Gamma increasing over 5m.
+  The compare table includes numerator and denominator for each cohort to avoid
+  mistaking missing Greeks for a negative signal.
+- 20 independent real examples are NOT available in the repo. Reaching 20
+  unverified overlapping strike events is NOT statistical validation. Even with
+  many inputs, events on the same market day/expiry share the same market shock.
+  Assess independent dates/expiries, external market-data provenance, and
+  walk-forward held-out periods before claiming predictive usefulness.
+
+Previously excluded, unverified old historical archives MUST NOT be re-used
+unless the user explicitly reauthorizes that dataset. The new research tool
+accepts only legitimately sourced CSVs the user chooses for review.

@@ -30,8 +30,10 @@ st.warning(
     "Spreads, Theta, IV, Delta, liquidity and contract expiry can dominate outcomes."
 )
 
-live_tab, evidence_tab = st.tabs(
-    ["Live NIFTY option-chain investigation", "Historical exact-contract fingerprint experiment"]
+live_tab, evidence_tab, case_tab = st.tabs(
+    ["Live NIFTY option-chain investigation",
+     "Single-contract fingerprint experiment",
+     "3×/5×/10× events vs non-events"]
 )
 
 with live_tab:
@@ -224,3 +226,116 @@ with evidence_tab:
         "matched non-events, no look-ahead, liquidity-aware fills and "
         "out-of-sample holdouts. This first lab is descriptive, not calibrated."
     )
+
+
+with case_tab:
+    from app.research.gamma_event_study import investigate_events
+
+    st.subheader("Repeated Gamma fingerprints — real 3×/5×/10× events vs non-events")
+    st.caption(
+        "Upload multiple CSVs, ONE true fixed NIFTY option contract in EACH file. "
+        "Browser/session-memory only; no automatic archive or broker request."
+    )
+    st.warning(
+        "No real 20-event finding exists yet. This tool needs legitimately obtained "
+        "and verified historical option bars. Do not upload previously excluded "
+        "unverified datasets until you approve their use."
+    )
+    files = st.file_uploader(
+        "NIFTY fixed-contract 1-minute CSVs (one strike, side and expiry per file)",
+        type=["csv"], accept_multiple_files=True, key="gamma_event_study_upload",
+        help=(
+            "Required: timestamp, open, high, low, close, volume, oi, "
+            "instrument_key, strike_price, option_type and expiry. "
+            "Optional historical gamma, delta, iv, theta, spot and bid/ask."
+        ),
+    )
+    st.caption(
+        "Every CSV must contain actual continuous 1-minute options candles. "
+        "A changing-strike ATM series cannot validate a 5× contract multiplier."
+    )
+    h = st.slider("Outcome horizon, minutes", 5, 120, 30, 5, key="case_horizon")
+    min_entry = st.number_input(
+        "Minimum hypothetical option entry premium ₹",
+        min_value=0.05, value=2.0, step=0.5, key="case_min_premium",
+    )
+    if st.button("Investigate repeated fingerprints", disabled=not files,
+                 type="primary", key="run_gamma_case_controls"):
+        try:
+            if len(files) > 100:
+                raise ValueError("Analyze at most 100 contract files per browser run.")
+            frames = [pd.read_csv(item) for item in files]
+            with st.spinner("Comparing 60/30/15/5-minute precursors and actual failed setups…"):
+                positive, negative, report = investigate_events(
+                    frames, horizon=h, min_premium=float(min_entry),
+                    min_events_for_review=20,
+                )
+            st.session_state["gamma_case_events"] = positive
+            st.session_state["gamma_case_controls"] = negative
+            st.session_state["gamma_case_report"] = report
+        except (ValueError, TypeError, KeyError, pd.errors.ParserError) as exc:
+            st.error(f"Data needs correction: {exc}")
+            for key in ("gamma_case_events", "gamma_case_controls", "gamma_case_report"):
+                st.session_state.pop(key, None)
+
+    case_report = st.session_state.get("gamma_case_report")
+    if case_report:
+        st.write(f"**Status:** {case_report['status']}")
+        a, b, c, d = st.columns(4)
+        a.metric("Observed ≥3× episodes", case_report["observed_3x_events"])
+        b.metric("Observed ≥5× episodes", case_report["observed_5x_events"])
+        c.metric("Observed ≥10× episodes", case_report["observed_10x_events"])
+        d.metric("Matched non-events", case_report["matched_controls"])
+        st.caption(
+            f"Unique event dates: {case_report.get('unique_event_dates', 0)} | "
+            f"Expiries: {case_report.get('unique_event_expiries', 0)} | "
+            f"Contracts: {case_report.get('unique_event_contracts', 0)}"
+        )
+        st.warning(case_report.get("warning", "") or
+                   "No complete 60-minute past + forward option windows.")
+        comparison = case_report.get("repeated_patterns", {})
+        if comparison:
+            compare_rows = []
+            for fingerprint, values in comparison.items():
+                positives = values["events"]
+                controls = values["matched_non_events"]
+                compare_rows.append({
+                    "Hypothesis": fingerprint,
+                    "Event matches": positives["observed"],
+                    "Event available": positives["total_available"],
+                    "Event rate": positives["rate"],
+                    "Control matches": controls["observed"],
+                    "Control available": controls["total_available"],
+                    "Control rate": controls["rate"],
+                    "Difference (descriptive only)": values["rate_difference_descriptive"],
+                })
+            st.subheader("Repeated hypotheses vs comparable non-events")
+            st.dataframe(pd.DataFrame(compare_rows), use_container_width=True,
+                         hide_index=True)
+        for frame_name, key in (("Observed events", "gamma_case_events"),
+                                ("Matched controls", "gamma_case_controls")):
+            event_frame = st.session_state.get(key)
+            st.subheader(frame_name)
+            if event_frame is None or event_frame.empty:
+                st.info("No comparable observations available.")
+                continue
+            columns = [
+                "signal_ist", "expiry", "strike_price", "option_type",
+                "entry_next_open", "observed_close_multiple",
+                "volume_5m_vs_prev30", "premium_return_5m_pct",
+                "oi_change_5m_pct", "iv_change_5m", "gamma_change_5m",
+            ]
+            st.dataframe(event_frame[
+                [col for col in columns if col in event_frame]
+            ].head(100), use_container_width=True, hide_index=True)
+            st.download_button(
+                f"Download {frame_name} CSV manually",
+                data=event_frame.to_csv(index=False).encode("utf-8"),
+                file_name=("gamma_events.csv" if key == "gamma_case_events"
+                           else "gamma_matched_non_events.csv"),
+                mime="text/csv", key=f"download_{key}",
+            )
+        if st.button("Discard in-memory study", key="clear_gamma_case_study"):
+            for key in ("gamma_case_events", "gamma_case_controls", "gamma_case_report"):
+                st.session_state.pop(key, None)
+            st.rerun()
