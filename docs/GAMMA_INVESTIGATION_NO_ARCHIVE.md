@@ -132,3 +132,37 @@ circular https://nsearchives.nseindia.com/content/circulars/FAOP66938.pdf.
 The official NSE daily F&O report can be found at
 https://www.nseindia.com/all-reports-derivatives. Both are separate
 from independent contract minute-level authentication.
+
+
+## NSE official F&O daily corroboration, no local archive
+
+NSE Indices historical data page is for UNDERLYING INDEX (NIFTY 50 etc.)
+daily OHLC and NOT actual expired strike CE/PE minute OHLC.
+
+NSE free contract-wise historical daily records list option trading date,
+expiry, strike, option side, DAILY open/high/low/close, contracts and end-of-day
+OI, not minute-level gamma, IV or minute OHLC:
+https://www.nseindia.com/report-detail/fo_eq_security
+
+Before the July 8, 2024 UDiFF format switch, official original NSE daily F&O
+bhavcopy used:
+- https://archives.nseindia.com/content/historical/DERIVATIVES/2024/APR/fo03APR2024bhav.csv.zip
+- https://archives.nseindia.com/content/historical/DERIVATIVES/2024/APR/fo04APR2024bhav.csv.zip
+
+Added a read-only IN-MEMORY button in the Legacy Validation tab that attempts
+both NSE-owned archive hosts and filters OPTIDX/NIFTY, expiry 04-Apr-2024,
+strikes 21450/21500/21550/21600, PE, daily data only. If NSE rejects requests
+from hosted/cloud environments, the UI truthfully reports unavailability;
+no scraped, generated or third-party substitute is used. Source ZIP and rows
+are NOT written to disk.
+
+Even if NSE official daily high-low encloses every legacy second-price, that
+only corroborates a *daily* bound, NOT the second-level sequence or independent
+1-minute prices. NSE's separate paid historical F&O Order & Trade product can
+supply trade records suitable to rebuild one-minute bars if obtainable:
+https://www.nseindia.com/static/market-data/eod-historical-data-subscription
+Ask marketdata@nse.co.in for April 3–4, 2024 NIFTY fixed-strike contract
+trade records and ask whether archived minute OI/IV/Greeks is supplied.
+Never claim Greeks are NSE-observed if inferred using model assumptions.
+
+No JEV, order placement, automated history collection or persistent archive.

@@ -418,3 +418,43 @@ with legacy_tab:
                      key="clear_legacy_reports"):
             st.session_state.pop("legacy_tick_reports", None)
             st.rerun()
+
+
+    st.divider()
+    st.subheader("Official NSE 2024 daily F&O cross-check (read only)")
+    st.caption(
+        "Requests two official NSE F&O bhavcopy ZIP files for Apr 3 and Apr 4, "
+        "2024 IN MEMORY. Filters NIFTY 04-Apr-2024 expiry PEs: "
+        "21450, 21500, 21550, 21600. Daily figures are not minute OHLC/Greeks."
+    )
+    if st.button("Fetch official NSE daily reference", key="official_nse_bhavcopy"):
+        from app.research.nse_fo_daily_check import official_four_pe_reference
+        try:
+            with st.spinner("Fetching official NSE daily F&O reports…"):
+                official_frame, verified_urls = official_four_pe_reference()
+            st.session_state["nse_eod_verified_frame"] = official_frame
+            st.session_state["nse_eod_source_urls"] = verified_urls
+            st.success(
+                f"Received {len(official_frame)} NSE daily contract rows; "
+                "this does NOT independently validate individual 1-minute bars."
+            )
+        except (RuntimeError, ValueError) as exc:
+            st.error(f"NSE daily source unavailable/invalid: {exc}")
+            st.caption(
+                "You may obtain original F&O bhavcopy files using the NSE "
+                "daily derivatives reports page. No replacement or fake "
+                "market values will be generated."
+            )
+    nse_eod = st.session_state.get("nse_eod_verified_frame")
+    if nse_eod is not None:
+        if nse_eod.empty:
+            st.warning("No matching 2024 NIFTY PE contracts in fetched daily reports.")
+        else:
+            st.dataframe(nse_eod, hide_index=True, use_container_width=True)
+        for official_source in st.session_state.get("nse_eod_source_urls", []):
+            st.caption(f"Source: {official_source}")
+        st.info(
+            "DAILY contract identity and OHLC/OI corroboration ONLY. "
+            "Original tick data remain quarantined pending independent "
+            "minute-level comparison. Never invent historical Gamma."
+        )
