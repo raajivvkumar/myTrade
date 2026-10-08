@@ -555,3 +555,12 @@ so keep independent backups. Archived datasets support future research and model
 validation; this change does not automatically retrain a model or promise improved
 predictions. The separately hosted Candle Lab is not synchronized with this local
 Python archive; exported CSVs can be loaded there.
+
+
+## Upstox read-only expired NIFTY option research
+
+MyTrade now supports a separate GET-only Upstox Plus fixed-contract historical data importer. Each output retains expiry, strike, CE/PE, lot size and instrument key. Dry-run does not need credentials:
+
+    python -m app.broker.upstox_cli probe --expiry 2026-03-24 --strike 23000 --side PE
+
+After manual token setup, use Upstox Plus and add --execute to fetch a small sample. Outputs remain UNVALIDATED pending independent NSE checks; they are not automatically put into the trusted history archive. **Do not assume five years of fixed-contract minute data**: the official expiry-list API advertises up to six months. See docs/UPSTOX.md for limitations and the test sequence. Existing Angel broker functionality remains unchanged.
