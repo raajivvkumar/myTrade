@@ -564,3 +564,8 @@ MyTrade now supports a separate GET-only Upstox Plus fixed-contract historical d
     python -m app.broker.upstox_cli probe --expiry 2026-03-24 --strike 23000 --side PE
 
 After manual token setup, use Upstox Plus and add --execute to fetch a small sample. Outputs remain UNVALIDATED pending independent NSE checks; they are not automatically put into the trusted history archive. **Do not assume five years of fixed-contract minute data**: the official expiry-list API advertises up to six months. See docs/UPSTOX.md for limitations and the test sequence. Existing Angel broker functionality remains unchanged.
+
+
+## Upstox Basic: FREE historical NIFTY index candles (Analytics Token)
+
+Without switching to Plus, you can start NIFTY 1-minute **underlying index** research using Upstox's one-year free read-only Analytics Token and Historical Candle V3. First preview has no network: `python -m app.broker.upstox_index_cli --from-date 2026-03-23 --to-date 2026-03-24`. After setting `UPSTOX_ANALYTICS_TOKEN` in your local `.env`, add `--execute` for one GET-only sample. Index OHLC is **not** expired option premium data; do not compute options Gamma Multiplier returns from this alone. Read [Basic Analytics setup](docs/UPSTOX_ANALYTICS.md). The Upstox Plus importer remains separate.
