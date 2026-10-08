@@ -555,3 +555,12 @@ so keep independent backups. Archived datasets support future research and model
 validation; this change does not automatically retrain a model or promise improved
 predictions. The separately hosted Candle Lab is not synchronized with this local
 Python archive; exported CSVs can be loaded there.
+
+
+## Optional DhanHQ read-only historical data
+
+DhanHQ expired rolling NIFTY options importer is prepared. No subscription is required for a dry-run, and it **never places trades**. Start with:
+
+    python -m app.broker.dhan_cli rolling --from-date 2026-03-23 --to-date 2026-03-25 --strike ATM --side PUT
+
+After an active Data API plan and local token, check with python -m app.broker.dhan_cli status, then add --execute to download a small sample. Results include actual strike per minute, are tagged UNVALIDATED_ROLLING_NOT_FIXED_CONTRACT, and must not be treated as a continuous fixed strike. See docs/DHANHQ.md for setup and safeguards.
