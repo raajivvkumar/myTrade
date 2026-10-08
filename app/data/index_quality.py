@@ -79,7 +79,29 @@ def _read_reference(path: Path) -> pd.DataFrame:
     return reference
 
 
+def _read_daily_reference(path: Path) -> dict[str, dict]:
+    """Read user-supplied daily OHLC; provenance is NOT exchange certified."""
+    daily = pd.read_csv(path)
+    required = {"date", "open", "high", "low", "close"}
+    if not required.issubset(daily.columns):
+        raise ValueError("Daily CSV requires date,open,high,low,close")
+    daily = daily[["date", "open", "high", "low", "close"]].copy()
+    daily["date"] = pd.to_datetime(daily["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    for column in PRICES:
+        daily[column] = pd.to_numeric(daily[column], errors="coerce")
+    if daily.isna().any().any() or daily.date.duplicated().any():
+        raise ValueError("Daily reference has missing, invalid or duplicate date/prices")
+    if (daily[list(PRICES)] <= 0).any().any():
+        raise ValueError("Daily reference has nonpositive OHLC")
+    if ((daily.low > daily[["open", "close"]].min(axis=1)) |
+        (daily.high < daily[["open", "close"]].max(axis=1)) |
+        (daily.low > daily.high)).any():
+        raise ValueError("Daily reference has inconsistent OHLC")
+    return {r["date"]: r for r in daily.to_dict("records")}
+
+
 def audit_index(source: Path, *, reference_csv: Path | None = None,
+                daily_reference_csv: Path | None = None,
                 point_tolerance: float = 0.5) -> tuple[dict, list[dict]]:
     """Audit real archived rows, never silently repair/crop input.
 
@@ -117,6 +139,10 @@ def audit_index(source: Path, *, reference_csv: Path | None = None,
     unique = frame.drop_duplicates("timestamp").reset_index(drop=True)
     unique["session_date"] = unique.timestamp.dt.date
     daily = []
+    daily_source = (_read_daily_reference(Path(daily_reference_csv))
+                    if daily_reference_csv is not None else None)
+    daily_reference_matches = 0
+    daily_reference_ohl_mismatch_days = 0
     gap_sample = []
     off_session_sample = []
     for d, group in unique.groupby("session_date", sort=True):
@@ -131,7 +157,7 @@ def audit_index(source: Path, *, reference_csv: Path | None = None,
             str(ts) for ts in outside.timestamp.iloc[:max(0, SAMPLE_LIMIT-len(off_session_sample))]
         )
         regular = inside.sort_values("timestamp")
-        daily.append({
+        daily_row = {
             "date": d.isoformat(),
             "observed": int(len(group)),
             "regular_session_rows": int(len(regular)),
@@ -144,7 +170,28 @@ def audit_index(source: Path, *, reference_csv: Path | None = None,
             "high": float(regular.high.max()) if len(regular) else None,
             "low": float(regular.low.min()) if len(regular) else None,
             "last_minute_close": float(regular.close.iloc[-1]) if len(regular) else None,
-        })
+            "close_definition": "LAST_1MIN_BAR_NOT_OFFICIAL_NIFTY_DAILY_CLOSE",
+            "reference_daily_close": None,
+            "reference_close_minus_last_minute_points": None,
+            "ohl_matches_user_daily_reference": None,
+        }
+        if daily_source is not None and d.isoformat() in daily_source and len(regular):
+            expected_daily = daily_source[d.isoformat()]
+            daily_reference_matches += 1
+            daily_row["reference_daily_close"] = expected_daily["close"]
+            daily_row["reference_close_minus_last_minute_points"] = round(
+                expected_daily["close"] - daily_row["last_minute_close"], 4
+            )
+            # The daily official index close is NOT the final minute close.
+            # Compare the same concepts: open, session high, and session low only.
+            ohl_match = all(
+                abs(daily_row[k] - expected_daily[k]) <= point_tolerance
+                for k in ("open", "high", "low")
+            )
+            daily_row["ohl_matches_user_daily_reference"] = ohl_match
+            if not ohl_match:
+                daily_reference_ohl_mismatch_days += 1
+        daily.append(daily_row)
     report = {
         "dataset": "UPSTOX_HISTORICAL_V3_NIFTY_INDEX_1MIN_NOT_OPTIONS",
         "quality_status": "UNVALIDATED_NEEDS_INDEPENDENT_NSE_CHECK",
@@ -159,6 +206,19 @@ def audit_index(source: Path, *, reference_csv: Path | None = None,
         "examples_outside_session_ist": off_session_sample[:SAMPLE_LIMIT],
         "backup_checksum_files_verified": checksum_verified,
         "reference_comparison": "NOT_PERFORMED",
+        "daily_reference_comparison": (
+            "NOT_PERFORMED" if daily_source is None
+            else "USER_SUPPLIED_DAILY_REFERENCE_NOT_NSE_CERTIFIED"
+        ),
+        "daily_reference_overlapping_days": daily_reference_matches,
+        "daily_reference_ohl_mismatch_days": daily_reference_ohl_mismatch_days,
+        "daily_close_definition": "LAST_1MIN_BAR_NOT_OFFICIAL_NIFTY_DAILY_CLOSE",
+        "daily_close_warning": (
+            "NIFTY official index closing value is computed using weighted "
+            "constituent closing prices over the final half-hour. It may differ "
+            "from the closing level of the 15:29-15:30 index minute candle; "
+            "do not treat that difference as a bad candle."
+        ),
         "coverage_warning": (
             "No NSE holiday/calendar supplied. Completely absent market sessions and "
             "special sessions cannot be classified. Expected 09:15..15:29 applies "
@@ -197,11 +257,16 @@ def main():
                         default=Path("../MyTradeOfflineArchive/reports"))
     parser.add_argument("--reference-csv", type=Path,
                         help="Optional independent minute OHLC CSV; authenticity not assumed")
+    parser.add_argument("--daily-reference-csv", type=Path,
+                        help="Optional user-supplied daily OHLC CSV; compare O/H/L only")
     parser.add_argument("--tolerance", type=float, default=0.5,
                         help="Index-point difference for user-supplied reference")
     a = parser.parse_args()
-    report, daily = audit_index(a.archive, reference_csv=a.reference_csv,
-                                point_tolerance=a.tolerance)
+    report, daily = audit_index(
+        a.archive, reference_csv=a.reference_csv,
+        daily_reference_csv=a.daily_reference_csv,
+        point_tolerance=a.tolerance,
+    )
     a.output_dir.mkdir(parents=True, exist_ok=True)
     out_json = a.output_dir / "nifty_1minute_quality.json"
     out_csv = a.output_dir / "nifty_1minute_sessions.csv"
@@ -212,7 +277,9 @@ def main():
     print(f"Normal-session missing minutes: {report['observed_regular_session_missing_minutes']}")
     print(f"Duplicate identical timestamps: {report['duplicate_rows_identical']}")
     print(f"Outside normal hours: {report['outside_regular_session_minutes']}")
-    print(f"Independent reference: {report['reference_comparison']}")
+    print(f"Independent minute reference: {report['reference_comparison']}")
+    print(f"Daily reference: {report['daily_reference_comparison']}")
+    print("NOTE: last_minute_close is NOT the official NIFTY daily close")
     print(f"Quality status: {report['quality_status']}")
     print(f"Reports: {out_json} and {out_csv}")
 

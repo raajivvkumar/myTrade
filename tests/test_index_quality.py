@@ -134,3 +134,47 @@ def test_no_files_is_fatal_not_a_pass(tmp_path):
     (tmp_path / "archive").mkdir()
     with pytest.raises(ValueError, match="No 1-minute"):
         audit_index(tmp_path / "archive")
+
+
+def test_daily_reference_ohl_matches_but_official_close_can_differ(tmp_path):
+    root, _, _ = sample_archive(tmp_path)
+    daily_csv = tmp_path / "daily.csv"
+    daily_csv.write_text(
+        "date,open,high,low,close\n"
+        "2026-03-23,23000,23001,22999,22977\n",
+        encoding="utf-8",
+    )
+    report, days = audit_index(root, daily_reference_csv=daily_csv)
+    assert report["daily_reference_overlapping_days"] == 1
+    assert report["daily_reference_ohl_mismatch_days"] == 0
+    assert report["quality_status"] == "UNVALIDATED_NEEDS_INDEPENDENT_NSE_CHECK"
+    assert days[0]["reference_daily_close"] == 22977
+    assert days[0]["reference_close_minus_last_minute_points"] == -23.5
+    assert days[0]["ohl_matches_user_daily_reference"] is True
+    assert days[0]["close_definition"] == "LAST_1MIN_BAR_NOT_OFFICIAL_NIFTY_DAILY_CLOSE"
+
+
+def test_daily_reference_ohl_disagreement_is_flagged_not_auto_repaired(tmp_path):
+    root, _, _ = sample_archive(tmp_path)
+    daily_csv = tmp_path / "daily.csv"
+    daily_csv.write_text(
+        "date,open,high,low,close\n"
+        "2026-03-23,23005,23010,22999,23004\n",
+        encoding="utf-8",
+    )
+    report, days = audit_index(root, daily_reference_csv=daily_csv)
+    assert report["daily_reference_ohl_mismatch_days"] == 1
+    assert days[0]["ohl_matches_user_daily_reference"] is False
+
+
+def test_duplicate_daily_reference_dates_are_rejected(tmp_path):
+    root, _, _ = sample_archive(tmp_path)
+    daily_csv = tmp_path / "daily.csv"
+    daily_csv.write_text(
+        "date,open,high,low,close\n"
+        "2026-03-23,23000,23001,22999,23000\n"
+        "2026-03-23,23000,23001,22999,23000\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Daily reference"):
+        audit_index(root, daily_reference_csv=daily_csv)

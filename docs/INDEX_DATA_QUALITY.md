@@ -34,3 +34,34 @@ For additional data, begin with a modest non-overlapping period after validating
     python -m app.data.index_quality
 
 Backups can optionally be uploaded to the existing user-owned private Google Drive location using the documented rclone sync, but that requires GOOGLE authorization on the user's PC. It does not upload automatically; none of these commands place an order.
+
+
+## NIFTY end-of-day CLOSE is not last 1-minute CLOSE
+
+The CSV field `last_minute_close` is the observed 15:29 IST one-minute bar's close (15:29–15:30 interval). **It is not the official NIFTY daily closing index**. NSE computes the official daily NIFTY close from constituents' weighted-average closing prices over the last half-hour, so the index daily close may legitimately differ from the final minute spot index level.
+
+Reference: https://www.nseindia.com/static/products-services/indices-faqs
+
+This report now includes `close_definition`, `daily_close_definition`, and `daily_close_warning`, to prevent accidental misinterpretation when backtesting.
+
+### Compare against independent daily OHLC
+
+Export your own legitimately obtained daily NIFTY 50 reference as a CSV containing:
+
+```csv
+date,open,high,low,close
+2026-03-23,22824.35,22851.70,22471.25,22512.65
+2026-03-24,22878.45,23057.30,22624.20,22912.40
+```
+
+The two rows are illustrative values published in market-data histories. **They are not an embedded, licensed, NSE-certified file**; verify their provenance before relying on them.
+
+Compare your entire 1m archive against that independent reference:
+
+```bash
+python -m app.data.index_quality --daily-reference-csv "D:/IndependentData/nifty_daily_ohlc.csv"
+```
+
+The audit compares daily **open, high, and low** against 1m aggregates at your chosen point tolerance and records mismatched session dates. It **does not demand equality of daily index closing value and last-minute spot close**. Instead, the daily CSV includes `reference_daily_close` and `reference_close_minus_last_minute_points` as informational data. A user-supplied reference CSV does not automatically become an exchange-verified source; its provenance must be reviewed.
+
+This is a reporting fix only; no downloaded or archived raw prices are modified.
