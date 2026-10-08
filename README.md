@@ -555,3 +555,12 @@ so keep independent backups. Archived datasets support future research and model
 validation; this change does not automatically retrain a model or promise improved
 predictions. The separately hosted Candle Lab is not synchronized with this local
 Python archive; exported CSVs can be loaded there.
+
+
+## Gamma Investigation Lab (read-only; no history archiving)
+
+The **Gamma-only** feature branch `feature/gamma-investigation-no-archive` adds a dedicated Streamlit **Gamma Investigation** screen accessible from `python -m streamlit run app/dashboard.py`. It reads Upstox Basic option-chain snapshots on demand via the free read-only Analytics Token to inspect NIFTY CE/PE Gamma, Delta, IV, Theta, liquidity and OI for matching exact strikes and expiries. The browser session optionally compares two in-memory same-contract snapshots. No JEV AI, external decision model or live order placement is used. This feature performs **no market-history archiving or automatic backup**; existing legacy tabs may still offer older history features and are unchanged.
+
+A separate optional CSV can be uploaded in the browser to investigate one actual, fixed-contract NIFTY option and retrospectively label 3×/5×/10× future-minute-close movements. Outcomes are **NOT tradable profit or confirmed Gamma causality**. They require many verified contracts, independent non-event baselines and realistic execution assumptions to become credible. Read [Gamma Investigation Setup](docs/GAMMA_INVESTIGATION_NO_ARCHIVE.md).
+
+Set `UPSTOX_ANALYTICS_TOKEN` only in the local private `.env` (never GitHub or chat), and rotate any token previously shared externally. No broker login is needed for offline CSV investigation.
