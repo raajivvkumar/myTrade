@@ -6,15 +6,13 @@ option closes; fingerprints use ONLY contemporaneous and preceding data.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, time
 from typing import Iterable
 
 import numpy as np
 import pandas as pd
 
-from app.research.gamma_lab import (
-    compare_fingerprint_cohorts, exact_contract_observations,
-)
+from app.research.gamma_lab import exact_contract_observations
 
 WINDOWS = (5, 15, 30, 60)
 CONDITION_SPECS = {
@@ -167,6 +165,16 @@ def _source_identity(frame: pd.DataFrame, *, file_number: int) -> str:
     for key in ("instrument_key", "strike_price", "option_type", "expiry"):
         if key not in frame or frame[key].isna().any() or frame[key].nunique(dropna=False) != 1:
             raise ValueError(f"Contract file {file_number}: exactly one {key} required")
+    time_values = _parse_time(frame["timestamp"])
+    if time_values.isna().any():
+        raise ValueError(f"Contract file {file_number}: invalid timestamps")
+    # Limit research to normal continuous 09:15..15:29 IST trading sessions.
+    # Muhurat/special sessions need separate calendar-aware investigation.
+    if ((time_values.dt.time < time(9, 15)) |
+        (time_values.dt.time > time(15, 29))).any():
+        raise ValueError(
+            f"Contract file {file_number}: outside regular NIFTY session"
+        )
     return "|".join(str(frame[k].iloc[0]) for k in (
         "instrument_key", "strike_price", "option_type", "expiry"
     ))
@@ -191,6 +199,33 @@ def _count_conditions(cohort: pd.DataFrame) -> dict:
             "rate": round(hits / denominator, 4) if denominator else None,
         }
     return result
+
+
+def _median_cohort_features(events: pd.DataFrame, controls: pd.DataFrame) -> dict:
+    """Missing historical Greeks remain NULL, never zero."""
+    metrics = {}
+    for w in WINDOWS:
+        for field in ("premium_return", "oi_change", "gamma_change",
+                      "delta_change", "iv_change", "theta_change", "spot_change"):
+            suffix = "pct" if field in ("premium_return", "oi_change") else "m"
+            name = f"{field}_{w}m_{suffix}" if field in (
+                "premium_return", "oi_change") else f"{field}_{w}m"
+            def stats(data):
+                if data.empty or name not in data:
+                    return {"available": 0, "median": None}
+                numbers = pd.to_numeric(data[name], errors="coerce").replace(
+                    [np.inf, -np.inf], np.nan
+                ).dropna()
+                return {
+                    "available": len(numbers),
+                    "median": round(float(numbers.median()), 5)
+                    if len(numbers) else None,
+                }
+            metrics[name] = {
+                "event": stats(events),
+                "matched_non_event": stats(controls),
+            }
+    return metrics
 
 
 def investigate_events(
@@ -237,6 +272,7 @@ def investigate_events(
             "observed_3x_events": 0, "observed_5x_events": 0,
             "observed_10x_events": 0, "matched_controls": 0,
             "repeated_patterns": {},
+            "window_feature_medians": {},
             "validation": "UNVERIFIED_INPUT_NOT_PREDICTIVE",
         }
     windows = pd.concat(all_windows, ignore_index=True)
@@ -296,9 +332,12 @@ def investigate_events(
             ),
         }
     report = {
-        "status": ("READY_FOR_PRELIMINARY_PATTERN_REVIEW"
-                   if len(events) >= min_events_for_review
-                   else "INSUFFICIENT_EVENTS_FOR_PRELIMINARY_REVIEW"),
+        "status": ("READY_FOR_PRELIMINARY_PATTERN_REVIEW_NOT_VALIDATED"
+                   if (len(events) >= min_events_for_review
+                       and len(controls) >= min_events_for_review
+                       and len(pd.to_datetime(events.signal_ist).dt.date.unique()) >= 10
+                       and events.expiry.nunique() >= 5)
+                   else "INSUFFICIENT_DIVERSE_EVENTS_OR_MATCHED_CONTROLS"),
         "files_supplied": supplied,
         "eligible_windows": len(windows),
         **event_counts,
@@ -316,6 +355,7 @@ def investigate_events(
             pd.to_numeric(events.gamma_observed_t, errors="coerce").notna().sum()
         ) if not events.empty else 0,
         "repeated_patterns": comparison,
+        "window_feature_medians": _median_cohort_features(events, controls),
         "validation": "UNVERIFIED_INPUT_NOT_PREDICTIVE",
         "warning": (
             "Event labels use future best MINUTE CLOSE; no execution or gamma causality "

@@ -36,7 +36,7 @@ def test_one_realistic_synthetic_event_and_one_matched_control():
     assert report["eligible_windows"] > 100
     assert report["unique_event_dates"] == 1
     assert report["unique_event_expiries"] == 1
-    assert report["status"] == "INSUFFICIENT_EVENTS_FOR_PRELIMINARY_REVIEW"
+    assert report["status"] == "INSUFFICIENT_DIVERSE_EVENTS_OR_MATCHED_CONTROLS"
     assert len(event) == 1
     assert event.observed_close_multiple.iloc[0] == 5.5
     assert len(ctrl) == 1
@@ -164,3 +164,21 @@ def test_nonoverlapping_cases_are_separated_by_at_least_horizon():
     assert len(cases) == 2
     gap = pd.to_datetime(cases.signal_ist).diff().dropna()
     assert gap.ge(pd.Timedelta(minutes=20)).all()
+
+
+def test_60_30_15_5_minute_fingerprint_medians_and_greek_missing():
+    a = contract()
+    pos, ctrl, report = investigate_events([a])
+    summary = report["window_feature_medians"]
+    for w in (5, 15, 30, 60):
+        assert summary[f"premium_return_{w}m_pct"]["event"]["available"] == 1
+        assert summary[f"gamma_change_{w}m"]["event"]["median"] is None
+        assert summary[f"oi_change_{w}m_pct"]["event"]["available"] == 1
+    assert summary["iv_change_15m"]["matched_non_event"]["median"] is None
+
+
+def test_outside_normal_session_rejected_not_mixed_into_fingerprints():
+    df = contract()
+    df.loc[12, "timestamp"] = pd.Timestamp("2026-10-08 15:31:00")
+    with pytest.raises(ValueError, match="outside regular"):
+        investigate_events([df])

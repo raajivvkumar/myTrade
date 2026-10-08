@@ -312,6 +312,24 @@ with case_tab:
             st.subheader("Repeated hypotheses vs comparable non-events")
             st.dataframe(pd.DataFrame(compare_rows), use_container_width=True,
                          hide_index=True)
+        medians = case_report.get("window_feature_medians", {})
+        if medians:
+            st.subheader("Before event: 5, 15, 30 and 60-minute comparisons")
+            med_rows = []
+            for metric, pair in medians.items():
+                med_rows.append({
+                    "Trailing feature": metric,
+                    "Events available": pair["event"]["available"],
+                    "Events median": pair["event"]["median"],
+                    "Controls available": pair["matched_non_event"]["available"],
+                    "Controls median": pair["matched_non_event"]["median"],
+                })
+            st.dataframe(pd.DataFrame(med_rows), hide_index=True,
+                         use_container_width=True)
+            st.caption(
+                "These are retrospective medians, NOT forecasts. Greeks omitted "
+                "in historical CSV remain missing."
+            )
         for frame_name, key in (("Observed events", "gamma_case_events"),
                                 ("Matched controls", "gamma_case_controls")):
             event_frame = st.session_state.get(key)
