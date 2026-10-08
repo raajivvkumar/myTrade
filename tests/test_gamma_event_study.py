@@ -109,6 +109,21 @@ def test_non_nifty_symbol_rejected():
         investigate_events([data])
 
 
+def test_niftybank_symbol_with_nifty_prefix_is_not_misclassified():
+    data = contract()
+    data["symbol"] = "NIFTYBANK 2026-10-13 25000 CE"
+    with pytest.raises(ValueError, match="NIFTY"):
+        investigate_events([data])
+
+
+def test_same_instrument_key_reused_for_another_strike_is_rejected():
+    first = contract()
+    second = contract(peak=None)
+    second["strike_price"] = 25100.0
+    with pytest.raises(ValueError, match="Recycled instrument key"):
+        investigate_events([first, second])
+
+
 def test_missing_forward_bar_censors_case_instead_of_pretending_full_path():
     data = contract().drop(index=135)
     ev, ctrl, report = investigate_events([data])
