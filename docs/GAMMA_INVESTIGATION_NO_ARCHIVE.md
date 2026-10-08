@@ -97,3 +97,38 @@ with no file writing, no database, no JEV and no saved market history.
 Previously excluded, unverified old historical archives MUST NOT be re-used
 unless the user explicitly reauthorizes that dataset. The new research tool
 accepts only legitimately sourced CSVs the user chooses for review.
+
+
+## User-approved 2024 legacy CSV validation — October 8, 2026
+
+User authorized checking previously excluded legacy NIFTY CSVs, but only
+admitting contracts that pass validation. This is NOT blanket permission
+to treat that unverified dataset as authentic.
+
+- Nine old April 2024 fixed-strike-named CSVs (34,692 rows) were inspected.
+- Their raw format is SECOND-resolution date/time/price/volume/oi, not verified
+  one-minute OHLC. Multiple prices can occur within the same second.
+- Structural checks show 21450PE (366/375 minutes), 21500PE (375/375),
+  21550PE (369/375), 21600PE (367/375) are the four denser contracts.
+  Five other files have only 5, 13, 34, 61 or 168 observed minutes and fail
+  preliminary research-coverage thresholds.
+- Despite plausible expiry, 0.05 price grid and lot-50 volume divisibility,
+  the original provider, actual contract key and minute-level option premiums
+  are not independently authenticated. Therefore **ZERO of nine source
+  contracts has yet passed the full research admission gate**. No real 5x
+  repeatability results should be inferred from this legacy sample.
+- Added Streamlit tab Legacy tick CSV validation gate and
+  app.research.gamma_legacy_validation.audit_legacy_tick_csv. The tab reports
+  metadata/coverage integrity IN MEMORY and NEVER promotes tick rows to
+  gamma events. An NSE historical F&O daily bhavcopy may support external
+  end-of-day confirmation, but it cannot certify same-second tick order,
+  exact minute closes or historical Greeks.
+- Do not interpolate missing 1-minute premiums, assign daily OI to every
+  tick, invent bid/ask spreads, or assume max/min tick prices are fills.
+  Quarantined files remain outside prediction training.
+
+Historic NIFTY weekly expiry was Thursday before 2025 revision; see NSE
+circular https://nsearchives.nseindia.com/content/circulars/FAOP66938.pdf.
+The official NSE daily F&O report can be found at
+https://www.nseindia.com/all-reports-derivatives. Both are separate
+from independent contract minute-level authentication.

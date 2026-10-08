@@ -30,10 +30,11 @@ st.warning(
     "Spreads, Theta, IV, Delta, liquidity and contract expiry can dominate outcomes."
 )
 
-live_tab, evidence_tab, case_tab = st.tabs(
+live_tab, evidence_tab, case_tab, legacy_tab = st.tabs(
     ["Live NIFTY option-chain investigation",
      "Single-contract fingerprint experiment",
-     "3×/5×/10× events vs non-events"]
+     "3×/5×/10× events vs non-events",
+     "Legacy tick CSV validation gate"]
 )
 
 with live_tab:
@@ -356,4 +357,64 @@ with case_tab:
         if st.button("Discard in-memory study", key="clear_gamma_case_study"):
             for key in ("gamma_case_events", "gamma_case_controls", "gamma_case_report"):
                 st.session_state.pop(key, None)
+            st.rerun()
+
+
+with legacy_tab:
+    from app.research.gamma_legacy_validation import audit_legacy_tick_csv
+
+    st.subheader("Old NIFTY 2024 tick CSV quality gate")
+    st.caption("Purely in-memory screening. Original market-data archives are NOT stored.")
+    st.warning(
+        "Structural checks alone do not verify broker origin, a unique NSE "
+        "instrument key, historical 1-minute premium closes or Greeks. "
+        "Even structurally sound files remain quarantined; none enter the "
+        "Gamma fingerprint experiment automatically."
+    )
+    old_files = st.file_uploader(
+        "Choose legacy NIFTY YYMDD-STRIKE CE/PE tick CSVs",
+        type=["csv"], accept_multiple_files=True, key="legacy_tick_screen",
+    )
+    if st.button("Validate old tick files (no event mining)",
+                 disabled=not old_files, key="validate_legacy_ticks"):
+        if len(old_files) > 100:
+            st.error("Process at most 100 files per screening batch.")
+        else:
+            reports = []
+            for old in old_files:
+                try:
+                    tick = pd.read_csv(old)
+                    reports.append(audit_legacy_tick_csv(tick, old.name))
+                except (ValueError, pd.errors.ParserError) as exc:
+                    reports.append({
+                        "filename": old.name, "status": "REJECT_UNREADABLE",
+                        "eligible_for_gamma_research": False,
+                        "reasons": [str(exc)],
+                    })
+            st.session_state["legacy_tick_reports"] = reports
+    reports = st.session_state.get("legacy_tick_reports", [])
+    if reports:
+        screen_rows = [{
+            "File": x["filename"],
+            "Status": x["status"],
+            "Observed minutes": x.get("observed_minutes"),
+            "Rows": x.get("records"),
+            "Exact dup rows": x.get("identical_duplicate_rows"),
+            "Different prices same second": x.get("same_second_multiple_prices"),
+            "Min price": x.get("min_premium"),
+            "Max price": x.get("max_premium"),
+            "Gamma study admitted": x["eligible_for_gamma_research"],
+            "Reason": "; ".join(x.get("reasons", [])),
+        } for x in reports]
+        st.dataframe(pd.DataFrame(screen_rows), hide_index=True,
+                     use_container_width=True)
+        st.info(
+            "To admit a contract, independently authenticate the original "
+            "broker/exchange instrument identity, dated premiums and the exact "
+            "minute-by-minute contract candles. Daily NSE bhavcopy alone "
+            "cannot authenticate the individual seconds in this tick feed."
+        )
+        if st.button("Clear validation results from session memory",
+                     key="clear_legacy_reports"):
+            st.session_state.pop("legacy_tick_reports", None)
             st.rerun()
