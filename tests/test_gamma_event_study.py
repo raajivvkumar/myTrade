@@ -52,7 +52,7 @@ def test_no_event_reports_zero_without_fabrication():
     assert ctrl.empty
     assert r["observed_3x_events"] == 0
     assert r["matched_controls"] == 0
-    assert r["status"] == "INSUFFICIENT_EVENTS_FOR_PRELIMINARY_REVIEW"
+    assert r["status"] == "INSUFFICIENT_DIVERSE_EVENTS_OR_MATCHED_CONTROLS"
 
 
 def test_missing_actual_greeks_do_not_count_as_zero_negative_signal():
