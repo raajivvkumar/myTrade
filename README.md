@@ -564,3 +564,8 @@ The **Gamma-only** feature branch `feature/gamma-investigation-no-archive` adds 
 A separate optional CSV can be uploaded in the browser to investigate one actual, fixed-contract NIFTY option and retrospectively label 3×/5×/10× future-minute-close movements. Outcomes are **NOT tradable profit or confirmed Gamma causality**. They require many verified contracts, independent non-event baselines and realistic execution assumptions to become credible. Read [Gamma Investigation Setup](docs/GAMMA_INVESTIGATION_NO_ARCHIVE.md).
 
 Set `UPSTOX_ANALYTICS_TOKEN` only in the local private `.env` (never GitHub or chat), and rotate any token previously shared externally. No broker login is needed for offline CSV investigation.
+
+
+### One-command Upstox Basic Gamma smoke test (no history storage)
+
+From the repository root: `python -m app.broker.upstox_chain_cli` is a network-free dry run. To fetch exactly one current-week NIFTY Option Chain response after setting your private `UPSTOX_ANALYTICS_TOKEN`, run `python -m app.broker.upstox_chain_cli --expiry current_week --execute`. It shows only up to 6 *investigation candidates* with Gamma, Delta, IV, OI, volume and spread. It does **not** claim a future multiplier and does not write candles, CSV, Parquet or any broker data to storage.

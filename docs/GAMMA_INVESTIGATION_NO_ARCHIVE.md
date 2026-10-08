@@ -46,3 +46,17 @@ Upstox Plus-only expired-instruments API can retrieve actual past fixed-strike c
 Official: https://upstox.com/developer/api-documentation/get-expired-historical-candle-data/
 
 This UI never places orders, schedules trading, saves a broker data archive, creates Google Drive files or uploads token/market data to ChatGPT.
+
+
+## Quick smoke-test without launching the dashboard
+
+The Upstox Option Chain endpoint accepts relative expiry keywords such as current_week, next_week, and current_month, as well as an actual YYYY-MM-DD. These are documented by Upstox: https://upstox.com/developer/api-documentation/get-pc-option-chain/
+
+Run in Windows Git Bash from the project root:
+
+    python -m app.broker.upstox_chain_cli
+    python -m app.broker.upstox_chain_cli --expiry current_week --execute
+
+Dry run is network-free; execute makes exactly one read-only GET. The terminal prints summary counts and at most six gamma-sensitive research-watch contracts, using real contract identity. It cannot place any order and writes no market history. Actual returned expiries are printed; exchange quote timestamps and completeness cannot be inferred from request time. If outside trading hours, displayed quotes can be stale.
+
+If you see HTTP 401/403 or an empty chain, first check that the freshly rotated Analytics Token is saved privately in UPSTOX_ANALYTICS_TOKEN and the requested expiry is valid. Never share a token, account password, or complete .env. You can share only redacted terminal output or counts for troubleshooting.
