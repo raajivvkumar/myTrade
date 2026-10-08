@@ -80,7 +80,7 @@ with live_tab:
         st.info("Expiry selection changed. Click Fetch for the newly selected expiry.")
     else:
         chain = current["frame"]
-        st.caption(f"Snapshot fetched at {current['retrieved_at'].strftime('%Y-%m-%d %H:%M:%S IST')}")
+        st.caption(f"Request completed at {current['retrieved_at'].strftime('%Y-%m-%d %H:%M:%S IST')} — underlying quotes may be delayed or stale, particularly after market close.")
         if chain.empty:
             st.warning("Upstox returned no listed option contracts for this expiry.")
         else:
@@ -147,9 +147,9 @@ with evidence_tab:
     st.markdown(
         "Provide **one genuine fixed-strike NIFTY option contract** with "
         "1-minute bars, columns "
-        "\`timestamp,open,high,low,close,volume,oi,instrument_key,"
-        "strike_price,option_type,expiry\`. "
-        "Optional historical \`gamma,delta,iv,theta\` columns must reflect "
+        "`timestamp,open,high,low,close,volume,oi,instrument_key,"
+        "strike_price,option_type,expiry`. "
+        "Optional historical `gamma,delta,iv,theta` columns must reflect "
         "what was actually known at each timestamp."
     )
     uploaded = st.file_uploader(
