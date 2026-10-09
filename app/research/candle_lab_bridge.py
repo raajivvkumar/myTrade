@@ -172,7 +172,7 @@ def build_live_gamma_panel(
         "contracts": contracts,
         "changes": changes,
         "disclaimer": (
-            "Within-expiry relative gamma/liquidity screen only. No validated 3x/5x/10x "
+            "Within-expiry relative gamma/liquidity screen only. No validated 2x/3x/5x/10x "
             "probability, current exchange quote timestamp, order or executable P&L."
         ),
     }
@@ -197,7 +197,7 @@ def build_event_study_panel(
         and report.get("independent_source_verified") is True
     )
     keys = (
-        "observed_3x_events", "observed_5x_events", "observed_10x_events",
+        "observed_2x_events", "observed_3x_events", "observed_5x_events", "observed_10x_events",
         "matched_controls", "unique_event_dates", "unique_event_expiries",
         "unique_event_contracts", "historical_gamma_observed_events",
     )
