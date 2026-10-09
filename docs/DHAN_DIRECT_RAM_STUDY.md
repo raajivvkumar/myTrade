@@ -103,7 +103,7 @@ git switch feature/dhan-event-astro-validation
 git pull --ff-only
 source .venv-dhan/Scripts/activate
 python -m pip install -r requirements.txt -r requirements-astro.txt
-python -m pytest -q
+bash scripts/run_tests_gitbash.sh
 
 # First: read-only six rolling-series calls; no broker data saved anywhere.
 python -m app.research.dhan_direct_ram_study \
@@ -199,3 +199,47 @@ and has CPython 3.12 Windows wheels. **Swiss Ephemeris has AGPL vs
 commercial licensing constraints**: review licensing before distributing
 or hosting a product that uses it. Running it privately for personal
 research is not the same as a license clearance for commercial hosting.
+
+### Windows pytest WinError 5 — safe workaround (October 9, 2026)
+
+If Git Bash shows `PermissionError: [WinError 5] Access is denied`
+at `C:\\Users\\hp\\AppData\\Local\\Temp\\pytest-of-hp`, this is
+**Windows pytest's temporary fixture directory**, not a failed Dhan
+market-data request or failing Gamma/Vedic assertion. One observed run
+had 148 passed and 47 fixture-setup errors from this same local access
+issue. GitHub Actions passed all 195 offline tests on that commit.
+
+Run from the checkout with an activated `.venv-dhan`:
+
+```bash
+cd /d/RaajivvProject/myTrade
+git pull --ff-only
+source .venv-dhan/Scripts/activate
+bash scripts/run_tests_gitbash.sh
+```
+
+This helper creates a **new random, dedicated pytest scratch folder on D:**
+next to the repository, uses `--basetemp` to avoid the inaccessible
+Windows `%TEMP%` pytest directory, disables pytest's repository cache,
+and deletes only the helper-created scratch folder on exit. Test
+fixtures can briefly write synthetic market-like objects inside this
+scratch folder, but neither actual Dhan market responses nor user
+archives are saved or touched by this test runner.
+
+Equivalent manual command (be aware pytest may remove/recreate the
+chosen `--basetemp` directory during its run; never point it at an
+important existing folder):
+
+```bash
+python -m pytest -q -p no:cacheprovider \
+  --basetemp="D:/RaajivvProject/myTrade-pytest-scratch"
+```
+
+Do **not** change permissions on your entire profile, use broad
+`icacls /grant Everyone:F` commands, delete `C:\\Users\\hp\\AppData\\Local\\Temp`,
+or run the whole terminal as administrator simply to work around pytest.
+The test helper solves the local sandbox placement problem without
+changing global security permissions.
+
+The direct Dhan/astro research command is separate from the offline
+test suite and does not depend on pytest's temporary fixtures.
