@@ -184,4 +184,20 @@ Manifests retain requested and returned IST bounds, returned/included counts and
 
 Rolling rows before the requested start or on dates after the end calendar date still stop collection. Index requests retain strict bounds. Unexpected-window errors now include first/last returned IST timestamps and counts before/at/after the boundary, without broker messages or credentials. Numeric, OHLC, duplicate, ordering and minute-granularity checks still apply to the entire response before end-date exclusion.
 
-Observed live status: after the expiry-code correction, the user reached cached INDEX/CALL/PUT entries for 2026-09-10 to 2026-10-10 and a cached older INDEX entry. The older CALL response stopped under the previous strict date-boundary check. Its actual offending timestamps have not yet been shared; end-date inclusion is a hypothesis until the updated progress output or diagnostics show the source bounds.
+Observed live status: the user's subsequent run saved eleven older CALL/PUT window pairs (168,006 newly saved option rows, excluding cache hits). Several windows explicitly reported excluded_end_date_rows=375 or 385, confirming end-date inclusion in those responses. The next CALL window, 2025-09-15 to 2025-10-15, stopped because at least one volume/OI/IV value was negative. The original diagnostic did not identify the field or value; the provider cause remains unverified.
+
+
+## Negative volume, OI or IV in historical responses
+
+A negative volume, OI or IV cannot be used as a valid research feature. The backfill retains the unmodified original response in raw JSON.gz, masks only negative cells in these three optional fields to unavailable (NaN) in Parquet, and adds volume_invalid_negative, oi_invalid_negative and iv_invalid_negative row flags. Valid OHLC and other cells remain unchanged. No absolute value, zero substitution, interpolation or candle fabrication is performed. Zero and missing values are not marked negative; numeric/finite, array, timestamp, OHLC and strike checks remain strict.
+
+Each manifest's optional_field_quality identifies the field, source/included negative counts, first negative source timestamp in IST and minimum negative source value. Daily and yearly reports count included negative values separately for volume, OI and IV. IV/OI availability excludes masked cells. history_summary.json aggregates source_negative_rows and included_negative_rows per field; source counts include excluded end-date bars and may repeat boundary observations across API responses, so they are not unique logical-data counts. Progress prints negative_optional_rows only when a source negative is observed.
+
+The same command resumes existing validated caches without redownloading them:
+
+```bash
+git pull --ff-only
+python -m app.broker.dhan_history --through 2026-10-09 --expiry-code 1 --execute
+```
+
+Earlier v1 caches passed a strict negative-value check, so omitted quality counts are treated as zero when rebuilding reports. Negative values in new responses remain inspectable in raw storage; masking does not establish why the provider returned them or imply a documented sentinel. Any proposed fingerprint requiring volume, OI or IV must exclude observations where its required feature is unavailable or flagged. Usable OHLC observations do not establish fixed-contract continuity, historical Greeks, valid signals or complete market coverage.

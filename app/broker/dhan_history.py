@@ -21,6 +21,7 @@ from app.broker.dhan_historical import DhanAPIError, DhanClient, RollingQuery, S
 
 IST = ZoneInfo("Asia/Kolkata")
 VERSION = 1
+OPTIONAL_NONNEGATIVE = ("volume", "oi", "iv")
 
 
 def five_year_start(day):
@@ -140,8 +141,22 @@ def parse_bars(raw, entry):
     if ((frame.low > frame[["open", "close"]].min(axis=1)) |
         (frame.high < frame[["open", "close"]].max(axis=1)) | (frame.low > frame.high)).any():
         raise ValueError("Invalid OHLC range")
-    if (frame[["volume", "oi", "iv"]].dropna(how="all") < 0).any().any():
-        raise ValueError("Negative volume, OI or IV")
+    # Negative ancillary values are unusable features, not invented prices.
+    # Preserve the original response in raw storage and mask only these cells
+    # in the research table. Do not infer a provider sentinel or replace with 0.
+    optional_quality = {}
+    for key in OPTIONAL_NONNEGATIVE:
+        invalid = frame[key].lt(0)
+        bad = frame.loc[invalid, key]
+        first = frame.loc[invalid, "timestamp"].min()
+        optional_quality[key] = dict(
+            source_negative_rows=int(invalid.sum()),
+            first_source_negative_timestamp_ist=(
+                first.tz_localize("Asia/Kolkata").isoformat() if not pd.isna(first) else None),
+            source_minimum_negative_value=float(bad.min()) if not bad.empty else None,
+        )
+        frame[f"{key}_invalid_negative"] = invalid
+        frame.loc[invalid, key] = np.nan
     if frame.timestamp.duplicated().any() or not frame.timestamp.is_monotonic_increasing:
         raise ValueError("Duplicate or out-of-order timestamps")
     if (frame.timestamp.dt.second.ne(0) | frame.timestamp.dt.microsecond.ne(0)).any():
@@ -159,6 +174,9 @@ def parse_bars(raw, entry):
     if rolling:
         frame.rename(columns={"strike": "actual_strike"}, inplace=True)
     frame["series"] = entry["series"]
+    for key in OPTIONAL_NONNEGATIVE:
+        optional_quality[key]["included_negative_rows"] = int(frame[f"{key}_invalid_negative"].sum())
+    frame.attrs["optional_field_quality"] = optional_quality
     frame.attrs["window_validation"] = dict(
         bounds, included_rows=len(frame), excluded_end_date_rows=excluded,
         policy="ROLLING_END_DATE_EXCLUDED" if rolling else "INDEX_STRICT_WINDOW",
@@ -187,6 +205,9 @@ def daily_facts(frame):
                     oi_available_rows=int(bars.oi.notna().sum()),
                     strike_switches_within_day=(int(bars.actual_strike.ne(bars.actual_strike.shift()).sum()-1)
                                                if "actual_strike" in bars else 0))
+        for key in OPTIONAL_NONNEGATIVE:
+            flag = f"{key}_invalid_negative"
+            item[f"{key}_negative_rows"] = int(bars[flag].sum()) if flag in bars else 0
         if not regular.empty:
             opening, closing = float(regular.open.iloc[0]), float(regular.close.iloc[-1])
             high, low = float(regular.high.max()), float(regular.low.min())
@@ -265,6 +286,7 @@ def save_chunk(root, entry, raw, frame):
                  fetched_at_ist=datetime.now(IST).isoformat(),
                  independently_verified=False,
                  window_validation=frame.attrs.get("window_validation", {}),
+                 optional_field_quality=frame.attrs.get("optional_field_quality", {}),
                  daily=daily_facts(frame))
     atomic_json(base.with_suffix(".manifest.json"), value)
     return value
@@ -276,6 +298,10 @@ def write_report(root, entries, completed, errors):
     if daily:
         table = pd.DataFrame(daily).sort_values(["series", "date"])
         table["year"] = table.date.str[:4]
+        # Earlier caches rejected all negatives, so absent quality columns mean 0.
+        for key in OPTIONAL_NONNEGATIVE:
+            column = f"{key}_negative_rows"
+            table[column] = table[column].fillna(0) if column in table else 0
         for (series, year), group in table.groupby(["series", "year"], sort=True):
             item = dict(series=series, year=int(year), observed_dates=len(group),
                         rows=int(group.rows.sum()),
@@ -284,6 +310,8 @@ def write_report(root, entries, completed, errors):
                         iv_available_rows=int(group.iv_available_rows.sum()),
                         oi_available_rows=int(group.oi_available_rows.sum()),
                         strike_switches_within_days=int(group.strike_switches_within_day.sum()))
+            for key in OPTIONAL_NONNEGATIVE:
+                item[f"{key}_negative_rows"] = int(group[f"{key}_negative_rows"].sum())
             good = group.dropna(subset=["first_open", "last_close"]) if "first_open" in group else pd.DataFrame()
             if series == "INDEX" and not good.empty:
                 item.update(first_observed_date=str(good.date.iloc[0]), last_observed_date=str(good.date.iloc[-1]),
@@ -302,6 +330,15 @@ def write_report(root, entries, completed, errors):
                    excluded_end_date_rows=sum(item.get("window_validation", {}).get("excluded_end_date_rows", 0)
                                               for item in completed),
                    window_boundary_policy="INDEX_STRICT_ROLLING_END_DATE_EXCLUSION",
+                   optional_field_policy="NEGATIVE_VOLUME_OI_IV_MASKED_WITH_FLAGS_RAW_RETAINED",
+                   optional_field_quality={
+                       key: {
+                           metric: sum(item.get("optional_field_quality", {}).get(key, {}).get(metric, 0)
+                                       for item in completed)
+                           for metric in ("source_negative_rows", "included_negative_rows")
+                       }
+                       for key in OPTIONAL_NONNEGATIVE
+                   },
                    collection_status="FINISHED_WITH_EMPTY_WINDOWS" if len(completed)==len(entries) and any(item["status"]=="EMPTY" for item in completed)
                    else "FINISHED" if len(completed)==len(entries) else "PARTIAL",
                    complete_five_year_market_coverage_confirmed=False,
@@ -333,7 +370,7 @@ VALIDATION_RULES = {
     "Optional candle array lengths differ", "Invalid epoch timestamp",
     "Boolean candle values", "Invalid numeric candle values",
     "Missing timestamp or OHLC", "Non-positive or missing OHLC/strike",
-    "Invalid OHLC range", "Negative volume, OI or IV",
+    "Invalid OHLC range",
     "Duplicate or out-of-order timestamps",
     "Provider returned timestamps outside request window", "Non-minute timestamp",
 }
@@ -410,6 +447,13 @@ def collect(entries, root, *, client=None, pause_seconds=1, max_requests=None, r
             completed.append(save_chunk(root, entry, raw, frame))
             excluded = frame.attrs.get("window_validation", {}).get("excluded_end_date_rows", 0)
             suffix = f", excluded_end_date_rows={excluded}" if excluded else ""
+            quality = frame.attrs.get("optional_field_quality", {})
+            negatives = {key: value for key, value in quality.items() if value["source_negative_rows"]}
+            if negatives:
+                counts = {key: dict(source=value["source_negative_rows"],
+                                    included=value["included_negative_rows"])
+                          for key, value in negatives.items()}
+                suffix += ", negative_optional_rows=" + json.dumps(counts, sort_keys=True)
             print(f'SAVED {entry["series"]}: {entry["start"]} to {entry["end"]}, {len(frame)} rows{suffix}', file=sys.stderr)
             stage = "REPORT_STORAGE"
             write_report(root, entries, completed, errors)

@@ -416,3 +416,130 @@ def test_window_error_report_contains_timestamps_without_broker_free_text(monkey
     assert bounds["first_returned_timestamp_ist"] == "2026-08-10T15:29:00+05:30"
     assert bounds["last_returned_timestamp_ist"] == "2026-08-11T09:15:00+05:30"
     assert json.loads((tmp_path / "last_failure.json").read_text())["error"]["window_diagnostics"] == bounds
+
+
+@pytest.mark.parametrize("field,value", [("volume", -2), ("oi", -3), ("iv", -1)])
+def test_negative_optional_cell_masks_only_that_feature_and_preserves_raw(tmp_path, field, value):
+    entry = plan()[1]
+    raw = response(True)
+    raw["data"]["ce"][field][0] = value
+    frame = history.parse_bars(raw, entry)
+    assert len(frame) == 2
+    assert frame[["open", "high", "low", "close"]].values.tolist() == [
+        [100, 102, 99, 101], [101, 103, 100, 102]]
+    assert pd.isna(frame[field].iloc[0])
+    assert frame[field].iloc[1] == raw["data"]["ce"][field][1]
+    assert frame[f"{field}_invalid_negative"].tolist() == [True, False]
+    quality = frame.attrs["optional_field_quality"][field]
+    assert quality == dict(source_negative_rows=1, included_negative_rows=1,
+                           first_source_negative_timestamp_ist="2026-10-08T09:16:00+05:30",
+                           source_minimum_negative_value=value)
+    assert raw["data"]["ce"][field][0] == value
+    manifest = history.save_chunk(tmp_path, entry, raw, frame)
+    assert manifest["optional_field_quality"][field] == quality
+    base = history.chunk_base(tmp_path, entry)
+    with gzip.open(base.with_suffix(".raw.json.gz"), "rt", encoding="utf-8") as source:
+        assert json.load(source) == raw
+    stored = pd.read_parquet(base.with_suffix(".parquet"))
+    assert pd.isna(stored[field].iloc[0])
+    assert stored[f"{field}_invalid_negative"].tolist() == [True, False]
+    facts = manifest["daily"][0]
+    assert facts[f"{field}_negative_rows"] == 1
+    if field in ("oi", "iv"):
+        assert facts[f"{field}_available_rows"] == 1
+
+
+def test_zero_optional_values_and_absent_values_are_not_negative():
+    raw = response(True)
+    raw["data"]["ce"]["volume"] = [0, 30]
+    raw["data"]["ce"]["oi"] = [0, 1200]
+    raw["data"]["ce"]["iv"] = [0, None]
+    frame = history.parse_bars(raw, plan()[1])
+    assert frame.loc[0, ["volume", "oi", "iv"]].tolist() == [0, 0, 0]
+    assert pd.isna(frame.iv.iloc[1])
+    for field in history.OPTIONAL_NONNEGATIVE:
+        assert not frame[f"{field}_invalid_negative"].any()
+        assert frame.attrs["optional_field_quality"][field]["source_negative_rows"] == 0
+        assert frame.attrs["optional_field_quality"][field]["source_minimum_negative_value"] is None
+
+
+def test_negative_open_interest_alias_is_flagged_for_index():
+    raw = response()
+    raw["open_interest"] = [-1, 1200]
+    frame = history.parse_bars(raw, plan()[0])
+    assert pd.isna(frame.oi.iloc[0])
+    assert frame.oi_invalid_negative.tolist() == [True, False]
+    assert raw["open_interest"] == [-1, 1200]
+
+
+@pytest.mark.parametrize("field", ["volume", "oi", "iv"])
+def test_nonfinite_optional_values_still_reject_entire_response(field):
+    raw = response(True)
+    raw["data"]["ce"][field][0] = float("inf")
+    with pytest.raises(ValueError, match="Invalid numeric candle values"):
+        history.parse_bars(raw, plan()[1])
+
+
+def test_negative_optional_values_do_not_bypass_invalid_ohlc():
+    raw = response(True)
+    raw["data"]["ce"]["iv"][0] = -1
+    raw["data"]["ce"]["low"][0] = 200
+    with pytest.raises(ValueError, match="Invalid OHLC range"):
+        history.parse_bars(raw, plan()[1])
+
+
+def test_negative_feature_on_excluded_boundary_is_not_counted_in_logical_data(tmp_path):
+    entry = reported_window_entries()[4]
+    raw = rolling_response_at(["2026-09-09 15:29", "2026-09-10 09:15"])
+    raw["data"]["ce"]["iv"][1] = -2
+    frame = history.parse_bars(raw, entry)
+    manifest = history.save_chunk(tmp_path, entry, raw, frame)
+    quality = manifest["optional_field_quality"]["iv"]
+    assert quality["source_negative_rows"] == 1
+    assert quality["included_negative_rows"] == 0
+    assert frame.iv.tolist() == [20]
+    assert manifest["daily"][0]["iv_available_rows"] == 1
+    assert manifest["daily"][0]["iv_negative_rows"] == 0
+    report = history.write_report(tmp_path, [entry], [manifest], [])
+    assert report["optional_field_quality"]["iv"] == dict(source_negative_rows=1, included_negative_rows=0)
+
+
+def test_optional_quality_report_mixes_old_cache_with_new_rows_and_resumes(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(history.time, "sleep", lambda _: None)
+    entries = plan()[:2]
+    index = history.save_chunk(tmp_path, entries[0], response(),
+                              history.parse_bars(response(), entries[0]))
+    # Simulate an already-validated v1 manifest produced before quality fields.
+    index.pop("optional_field_quality")
+    for row in index["daily"]:
+        for field in history.OPTIONAL_NONNEGATIVE:
+            row.pop(f"{field}_negative_rows")
+    history.atomic_json(history.chunk_base(tmp_path, entries[0]).with_suffix(".manifest.json"), index)
+    class NegativeFeatures(Client):
+        def _call(self, *args):
+            raw = response(True)
+            raw["data"]["ce"]["volume"] = [-2, 30]
+            raw["data"]["ce"]["oi"] = [-3, 1200]
+            raw["data"]["ce"]["iv"] = [-1, -5]
+            return raw
+    report = history.collect(entries, tmp_path, client=NegativeFeatures())
+    assert report["collection_status"] == "FINISHED"
+    assert report["rows"] == 4
+    assert report["optional_field_quality"] == {
+        "volume": dict(source_negative_rows=1, included_negative_rows=1),
+        "oi": dict(source_negative_rows=1, included_negative_rows=1),
+        "iv": dict(source_negative_rows=2, included_negative_rows=2),
+    }
+    yearly = {item["series"]: item for item in report["yearly"]}
+    assert yearly["INDEX"]["iv_negative_rows"] == 0
+    assert yearly["WEEK_1_ATM_CALL"]["iv_negative_rows"] == 2
+    assert yearly["WEEK_1_ATM_CALL"]["iv_available_rows"] == 0
+    assert yearly["WEEK_1_ATM_CALL"]["oi_available_rows"] == 1
+    daily = pd.read_csv(tmp_path / "daily_quality.csv")
+    assert daily.iv_negative_rows.tolist() == [0, 2]
+    assert "negative_optional_rows=" in capsys.readouterr().err
+    retry = Client()
+    repeated = history.collect(entries, tmp_path, client=retry)
+    assert retry.calls == ["profile"]
+    assert repeated["optional_field_quality"] == report["optional_field_quality"]
+    assert repeated["fixed_contract_multiplier_event_count"] is None
