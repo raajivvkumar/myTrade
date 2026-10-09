@@ -211,6 +211,8 @@ def run(args, client=None, sleeper=clock.sleep):
         "status": "PREVIEW_NO_API_CALLS", "planned_api_requests": planned,
         "completed_api_requests": 0, "empty_responses": 0,
         "rows_observed": 0, "market_files_saved": 0, "orders_sent": 0,
+        "missing_cells": {"volume": 0, "oi": 0, "iv": 0, "spot": 0},
+        "invalid_negative_source_cells": {"volume": 0, "oi": 0, "iv": 0},
         "history_verified_exact_contract": False,
         "real_2x_3x_5x_10x_multiplier_events": None,
         "historical_gamma_verified": False,
@@ -241,7 +243,8 @@ def run(args, client=None, sleeper=clock.sleep):
         try:
             raw = client._call("POST", "/charts/rollingoption", q.payload())
             frame = parse_bars(raw, entry)
-            merge_day(dates, study_chunk(frame, args.horizon, args.min_price))
+            if not frame.empty:
+                merge_day(dates, study_chunk(frame, args.horizon, args.min_price))
         except (DhanAPIError, ValueError, KeyError, TypeError) as error:
             report["status"] = "STOPPED_AT_FAILED_REQUEST"
             report["failure"] = {"start": str(q.start), "end_exclusive": str(q.end),
@@ -254,6 +257,14 @@ def run(args, client=None, sleeper=clock.sleep):
         report["completed_api_requests"] += 1
         report["empty_responses"] += int(frame.empty)
         report["rows_observed"] += int(len(frame))
+        for field in report["missing_cells"]:
+            report["missing_cells"][field] += (
+                int(frame[field].isna().sum()) if field in frame else int(len(frame))
+            )
+        for field in report["invalid_negative_source_cells"]:
+            flag = field + "_invalid_negative"
+            if flag in frame:
+                report["invalid_negative_source_cells"][field] += int(frame[flag].sum())
         del raw, frame
         if args.progress and report["completed_api_requests"] % 25 == 0:
             print(f'Processed {report["completed_api_requests"]}/{planned} responses in RAM',
