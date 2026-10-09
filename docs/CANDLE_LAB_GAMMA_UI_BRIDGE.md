@@ -37,7 +37,7 @@ prepares:
 
 \`build_event_study_panel(report, source_provenance=...)\` returns ONLY
 metadata/status while historical source is unverified, even if old CSV
-contains hypothetical 3x/5x event labels. Even independently verified
+contains hypothetical 2x/3x/5x/10x event labels. Even independently verified
 minute data would only allow retrospective descriptive event counts,
 never predictive probabilities or BUY/SELL.
 
