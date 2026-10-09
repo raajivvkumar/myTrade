@@ -1,3 +1,4 @@
+import ipaddress
 import sqlite3
 
 import pandas as pd
@@ -88,8 +89,21 @@ def test_offline_dashboard_browses_and_backtests_archive(monkeypatch, tmp_path):
     from pathlib import Path
     from streamlit.testing.v1 import AppTest
 
-    def offline(*args, **kwargs):
-        raise AssertionError("Offline history must not contact a network service")
+    # Streamlit's asyncio runner uses a 127.0.0.1 socketpair on Windows.
+    # A global block on socket.connect prevents the event loop from starting.
+    # Keep external network connections blocked but allow local IPC.
+    original_connect = socket.socket.connect
+
+    def offline(sock, address):
+        if sock.family == socket.AF_UNIX:
+            return original_connect(sock, address)
+        if sock.family in (socket.AF_INET, socket.AF_INET6) and isinstance(address, tuple):
+            try:
+                if ipaddress.ip_address(address[0]).is_loopback:
+                    return original_connect(sock, address)
+            except (ValueError, TypeError, IndexError):
+                pass
+        raise AssertionError("Offline history must not contact an external network service")
 
     monkeypatch.setattr(socket.socket, "connect", offline)
     monkeypatch.setenv("MYTRADE_DATA_DIR", str(tmp_path))
