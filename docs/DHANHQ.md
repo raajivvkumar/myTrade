@@ -45,7 +45,7 @@ The probe makes one GET /v2/profile and, only with an active data plan, one POST
 
 Share only the sanitized summary or error, never your token or .env. There are no order endpoints or scheduled requests. Static IP is required by Dhan for order placement, not this data-only workflow. Redirects are disabled so credentials are not forwarded to another host.
 
-Live connection status for this implementation: no Dhan token was available in the agent session or the inspected local .env; no broker request was made. Automated tests use synthetic/mocked responses. Activate/confirm Data APIs yourself through Dhan; this code does not purchase a plan or rotate your account credentials.
+Connection evidence supplied by the user: a local 2026-10-08 probe reported an Active Data API plan and 14 candles labeled 09:16–09:29, with 09:15 absent from the expected 15-label window. That is 93.33% label coverage under the probe’s assumed convention. Boundary exclusion, close-versus-open labels and source omission remain unresolved; do not manufacture the missing bar. Only three OHLC rows were shared. The agent has no direct Dhan account connection here; automated tests remain synthetic/mocked.
 
 ## Preview (no credentials needed)
 
@@ -83,3 +83,50 @@ https://github.com/dhan-oss/DhanHQ-py
 ## Security
 
 Source control holds a blank .env.example; your real .env is git-ignored. If any earlier credential values in repository history were genuine, rotate them immediately. Removing them from the latest commit does not erase history.
+
+## Five-year newest-first backfill and preliminary analysis
+
+The user explicitly requested this historical collection. The new command saves local broker responses under the ignored data directory, separately from the earlier memory-only probe. It does not modify the original Candle Lab or upload market data to GitHub.
+
+As of 2026-10-09, the inclusive requested range is 2021-10-09 through 2026-10-09. The default selects NIFTY 50 index one-minute bars and ATM CALL/PUT rolling series with WEEK expiry flag and expiry code 0. It processes newest windows first, with at most 30 calendar days per window and an exclusive next-day end. This is 61 windows, 183 historical requests plus a profile check. Data for the current day may be incomplete.
+
+From your existing Git Bash checkout:
+
+```bash
+cd /d/RaajivvProject/myTrade
+git fetch origin
+git switch feature/dhanhq-readonly-data-prep
+git pull --ff-only
+source .venv-dhan/Scripts/activate
+python -m pip install -r requirements.txt
+
+# Preview: no token read, network or output files
+python -m app.broker.dhan_history --through 2026-10-09
+
+# Collect and analyze; token stays in your local .env
+python -m app.broker.dhan_history --through 2026-10-09 --execute
+```
+
+Keep any local changes if Git refuses a switch or pull. Repeating the exact command resumes from verified cached chunks instead of requesting them again. Keep the same --through and --from-date for stable request boundaries; moving the range produces a different chunk plan. A later run must stay within the provider's then-current five-year retention window. --max-requests 3 limits a pilot to three new data calls; --retry-empty revisits cached empty responses. An expired token, provider failure or validation failure stops the run after saving an incremental summary. Refresh the token locally and resume; cache corruption is retained for inspection and reported, never automatically deleted.
+
+Optional relative strikes use the documented syntax, for example --strikes ATM ATM+1 ATM-1. --expiry-flag MONTH and --expiry-code 1 or 2 select other documented rolling buckets. Each extra relative strike adds two option requests per window. The default is a bounded research starting set, not every strike and historical expiry.
+
+Outputs:
+
+- chunks/<series>/*.raw.json.gz: original successful validated response.
+- chunks/<series>/*.parquet: validated minute rows; rolling actual_strike is retained.
+- chunks/<series>/*.manifest.json: request parameters, SHA-256 hashes and daily facts.
+- daily_quality.csv: observed-date row counts, IV/OI availability, strike switches, and missing-label counts under both 09:15–15:29 opening-label and 09:16–15:30 closing-label conventions.
+- history_summary.json: collection progress, empty windows, yearly source observations, index span change and median observed session range.
+
+Use this to inspect the summary after collection:
+
+```bash
+cat data/raw/dhan/backfill/NIFTY/history_summary.json
+```
+
+FINISHED means all planned API windows were processed; it does not mean five years of complete or independently accurate market data. FINISHED_WITH_EMPTY_WINDOWS requires investigation. Missing counts cover observed dates only; the exchange calendar, completely absent sessions, special sessions and timestamp convention still need authentication. Prices are not adjusted or silently filled. The displayed index span change is based on first/last observed source prices, not a verified annual total return.
+
+Historical rolling responses provide OHLC, IV, OI, volume, spot and actual strike, not historical Gamma/Delta or a verified fixed security ID and expiry for every bar. The summary deliberately leaves fixed-contract 2x/3x/5x/10x event count null. Even an unchanged strike can roll to another expiry. Do not calculate those multipliers by stitching ATM prices, infer dealer positions from OI, or label correlation as Gamma causation.
+
+Share history_summary.json and daily_quality.csv for the next analysis. Retain raw chunks locally for detailed investigation; do not paste credentials or commit market-data archives. No five-year live dataset has yet been downloaded or analyzed in this agent session.
