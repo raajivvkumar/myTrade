@@ -105,9 +105,9 @@ class MockClient:
         if self.empty:
             return {"data": {"ce": None}}
         f = sample()
-        stamps = f.timestamp.dt.tz_localize("Asia/Kolkata")
+        start_epoch = int(pd.Timestamp("2026-10-06 09:15", tz="Asia/Kolkata").timestamp())
         return {"data": {"ce": {
-            "timestamp": (stamps.astype("int64") // 1_000_000_000).tolist(),
+            "timestamp": [start_epoch + 60 * i for i in range(len(f))],
             "open": f.open.tolist(), "high": f.high.tolist(),
             "low": f.low.tolist(), "close": f.close.tolist(),
             "strike": f.actual_strike.tolist(),
