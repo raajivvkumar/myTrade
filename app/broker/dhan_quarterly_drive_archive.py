@@ -241,25 +241,28 @@ def archive_quarter(q, *, client, staging, remote, intervals=INTERVALS,
     # Recovery case: process stopped after the final manifest was flushed,
     # before .partial could be renamed and uploaded. Never create a second
     # duplicate manifest or redo successful broker requests.
+    manifested = None
     if part_path.exists():
         with zipfile.ZipFile(part_path, "r") as existing:
             if "manifest.json" in existing.namelist():
-                manifest = json.loads(existing.read("manifest.json"))
+                manifested = json.loads(existing.read("manifest.json"))
                 if (len(complete) != len(planned)
-                        or manifest["requests_planned"] != len(planned)
-                        or manifest["quarter"] != q.key):
+                        or manifested["requests_planned"] != len(planned)
+                        or manifested["quarter"] != q.key):
                     raise RuntimeError("Completed staging ZIP does not match quarter plan")
-                part_path.replace(final_path)
-                uploaded = upload_fn(final_path, remote)
-                final_path.unlink()
-                return {
-                    "quarter": q.key, "status": uploaded,
-                    "requests": len(planned), "new_calls": 0,
-                    "empty_responses": manifest["empty_responses"],
-                    "rows": manifest["rows_exported"],
-                    "coverage_status": manifest["coverage_status"],
-                    "resumed_completed_zip": True,
-                }
+    if manifested is not None:
+        # Windows locks an open ZIP; the with block MUST close before rename.
+        part_path.replace(final_path)
+        uploaded = upload_fn(final_path, remote)
+        final_path.unlink()
+        return {
+            "quarter": q.key, "status": uploaded,
+            "requests": len(planned), "new_calls": 0,
+            "empty_responses": manifested["empty_responses"],
+            "rows": manifested["rows_exported"],
+            "coverage_status": manifested["coverage_status"],
+            "resumed_completed_zip": True,
+        }
     performed = 0
     with zipfile.ZipFile(part_path, "a", compression=zipfile.ZIP_DEFLATED,
                          compresslevel=6, allowZip64=True) as archive:
