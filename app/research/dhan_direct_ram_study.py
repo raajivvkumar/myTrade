@@ -403,9 +403,13 @@ def run(args, client=None, sleeper=clock.sleep):
         report["status"] = "BLOCKED_DATA_PLAN_NOT_ACTIVE"
         return report
     dates = {}
+    transit_groups = []
     astrology_fn = None
     if getattr(args, "vedic_astrology", False):
         from app.research.vedic_event_ephemeris import sidereal_positions
+        from app.research.vedic_strike_transit_study import (
+            transit_strike_observations, summarize_transit_impact,
+        )
         astrology_fn = sidereal_positions
     for q in queries(args.from_date, args.through, args.full):
         if args.max_requests and report["completed_api_requests"] >= args.max_requests:
@@ -425,6 +429,10 @@ def run(args, client=None, sleeper=clock.sleep):
                     frame, args.horizon, args.min_price,
                     volume_baseline_minutes=getattr(args, "volume_baseline_minutes", 30),
                     astrology_fn=astrology_fn))
+                if astrology_fn:
+                    transit_groups.append(transit_strike_observations(
+                        frame, series=entry["series"],
+                        expiry_flag=q.expiry_flag, expiry_code=q.expiry_code))
         except (DhanAPIError, ValueError, KeyError, TypeError, RuntimeError) as error:
             report["status"] = "STOPPED_AT_FAILED_REQUEST"
             report["failure"] = {"start": str(q.start), "end_exclusive": str(q.end),
@@ -457,6 +465,9 @@ def run(args, client=None, sleeper=clock.sleep):
     if report["status"] == "PREVIEW_NO_API_CALLS":
         report["status"] = "PARTIAL_MAX_REQUESTS"
     report["proxy_analysis"] = aggregate(dates)
+    if astrology_fn:
+        report["vedic_transit_strike_numerology"] = summarize_transit_impact(transit_groups)
+        report["vedic_transit_strike_numerology"]["verified_market_gamma_effect"] = None
     return report
 
 
