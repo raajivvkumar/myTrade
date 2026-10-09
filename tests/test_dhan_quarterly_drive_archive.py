@@ -264,3 +264,24 @@ def test_empty_dhan_interval_is_disclosed_not_claimed_complete(
     assert observed[0]["empty_responses"] == 1
     assert observed[0]["coverage_status"] == "PARTIAL_EMPTY_RESPONSES"
     assert report["all_requested_quarters_covered"] is False
+
+
+def test_bulk_followup_skips_existing_drive_quarter_without_re_downloading(
+        tmp_path, monkeypatch):
+    args = options(tmp_path)
+    args.execute = True
+    expected = archive.plan_quarters(
+        args.from_date, args.through, today=TODAY)[0].zip_name
+    monkeypatch.setattr(archive, "_verify_remote", lambda *_: None)
+    monkeypatch.setattr(archive, "_remote_names", lambda *_: {expected})
+    monkeypatch.setattr(
+        archive, "_remote_md5", lambda *_: "a" * 32)
+    broker = MockDhan()
+    result = archive.run(args, client=broker, sleeper=lambda _: None)
+    assert broker.calls == []
+    assert result["status"] == "EXISTING_REMOTE_QUARTERS_NOT_REVERIFIED"
+    assert result["archived_quarters"][0]["status"] == (
+        "EXISTING_REMOTE_ARCHIVE_UNVERIFIED_THIS_RUN")
+    assert result["archived_quarters"][0]["remote_md5_observed"] == "a" * 32
+    assert result["all_requested_quarters_covered"] is False
+    assert not list(tmp_path.iterdir())
