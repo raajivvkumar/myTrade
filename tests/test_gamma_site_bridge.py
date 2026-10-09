@@ -84,12 +84,14 @@ def test_naive_retrieval_time_rejected():
 
 def test_unverified_sample_counts_never_become_real_evidence():
     fake = {
+        "observed_2x_events": 1000,
         "observed_5x_events": 500,
         "observed_3x_events": 700,
         "independent_source_verified": False,
     }
     result = build_event_study_panel(fake, source_provenance="UNVERIFIED")
     assert result["status"] == "DATA_VERIFICATION_REQUIRED"
+    assert result["counts"]["observed_2x_events"] is None
     assert result["counts"]["observed_5x_events"] is None
     assert result["validated_multiplier_probability"] is None
     assert result["trade_signal"] is None
@@ -97,20 +99,24 @@ def test_unverified_sample_counts_never_become_real_evidence():
 
 def test_daily_nse_bhavcopy_only_is_not_minute_verified():
     result = build_event_study_panel(
-        {"independent_source_verified": True, "observed_3x_events": 15},
+        {"independent_source_verified": True, "observed_2x_events": 26,
+         "observed_3x_events": 15},
         source_provenance="INDEPENDENT_DAILY_ONLY",
     )
     assert not result["minute_option_history_verified"]
+    assert result["counts"]["observed_2x_events"] is None
     assert result["counts"]["observed_3x_events"] is None
 
 
 def test_no_false_prediction_with_independent_minute_history():
     out = build_event_study_panel(
-        {"independent_source_verified": True, "observed_3x_events": 2,
-         "observed_5x_events": 1, "matched_controls": 2},
+        {"independent_source_verified": True, "observed_2x_events": 4,
+         "observed_3x_events": 2, "observed_5x_events": 1,
+         "matched_controls": 2},
         source_provenance="INDEPENDENT_MINUTE_VERIFIED",
     )
     assert out["status"] == "DESCRIPTIVE_RESEARCH"
+    assert out["counts"]["observed_2x_events"] == 4
     assert out["counts"]["observed_5x_events"] == 1
     assert out["validated_multiplier_probability"] is None
     assert out["order_allowed"] is False
