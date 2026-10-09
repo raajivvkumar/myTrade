@@ -7,7 +7,8 @@ Note: historical fixed-contract identity / true Gamma remains UNVERIFIED.
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 import json
 import math
 import sys
@@ -19,8 +20,9 @@ from app.broker.dhan_history import (
     CandleWindowError, five_year_start, parse_bars, VALIDATION_RULES,
 )
 from app.research.dhan_direct_ram_study import queries
-from app.research.option_multiplier_event_scan import (
-    scan_rolling_frame, summarize_scans,
+from app.research.option_multiplier_event_scan import scan_rolling_frame
+from app.research.five_year_ram_accumulators import (
+    StreamingRollingSummary, StreamingTransitSummary,
 )
 
 
@@ -36,11 +38,22 @@ def run(args, *, client=None, sleeper=time.sleep):
     if getattr(args, "vedic_transits", False) and not getattr(args, "vedic_astrology", False):
         raise ValueError("--vedic-transits requires --vedic-astrology")
     planned = sum(1 for _ in queries(args.from_date, args.through, args.full))
+    start_request = getattr(args, "start_request", 0)
+    if (type(start_request) is not int or
+            start_request < 0 or start_request >= planned):
+        raise ValueError("start-request must be between 0 and planned requests minus one")
     report = {
         "mode": "HISTORICAL_ROLLING_OPTION_PROXY_DISCOVERY",
         "status": "PREVIEW_NO_API_CALLS",
         "planned_api_requests": planned,
+        "requested_start_date": args.from_date.isoformat(),
+        "requested_end_date_inclusive": args.through.isoformat(),
+        "read_order": "NEWEST_30_CALENDAR_DAYS_FIRST",
         "completed_api_requests": 0,
+        "skipped_prior_api_requests": start_request,
+        "next_request_index_zero_based": start_request,
+        "covered_entire_requested_universe": False,
+        "coverage_fraction_of_requested_calls": 0.0,
         "max_requests": args.max_requests,
         "rows_received": 0,
         "empty_responses": 0,
@@ -67,17 +80,19 @@ def run(args, *, client=None, sleeper=time.sleep):
     if str(client.profile().get("dataPlan", "")).lower() != "active":
         report["status"] = "BLOCKED_DATA_PLAN_NOT_ACTIVE"
         return report
-    series_days = []
-    transit_groups = []
+    scan_summary = StreamingRollingSummary(max_examples=args.max_examples)
+    transit_summary = (StreamingTransitSummary(max_examples=args.max_examples)
+                       if getattr(args, "vedic_transits", False) else None)
     astro_fn = None
     if getattr(args, "vedic_astrology", False):
         from app.research.vedic_event_ephemeris import sidereal_positions
         astro_fn = sidereal_positions
     if getattr(args, "vedic_transits", False):
-        from app.research.vedic_strike_transit_study import (
-            transit_strike_observations, summarize_transit_impact,
-        )
-    for q in queries(args.from_date, args.through, args.full):
+        from app.research.vedic_strike_transit_study import transit_strike_observations
+    for request_index, q in enumerate(
+            queries(args.from_date, args.through, args.full)):
+        if request_index < start_request:
+            continue  # Explicitly skipped earlier queries; never claim full coverage.
         if args.max_requests is not None and report["completed_api_requests"] >= args.max_requests:
             break
         sleeper(args.pause)
@@ -93,19 +108,20 @@ def run(args, *, client=None, sleeper=time.sleep):
             frame = parse_bars(raw, entry)
             stage = "OBSERVED_PREMIUM_EVENT_SCAN"
             if not frame.empty:
-                series_days.append(scan_rolling_frame(
+                scan_summary.add(scan_rolling_frame(
                     frame, series=entry["series"], side=q.side,
                     horizon=args.horizon, min_price=args.min_price,
                     astrology_fn=astro_fn, max_examples=args.max_examples))
                 if getattr(args, "vedic_transits", False):
                     stage = "VEDIC_TRANSIT_DESCRIPTIVE_CONTROLS"
-                    transit_groups.append(transit_strike_observations(
+                    transit_summary.add(transit_strike_observations(
                         frame, series=entry["series"],
                         expiry_flag=q.expiry_flag, expiry_code=q.expiry_code))
         except (DhanAPIError, ValueError, RuntimeError, KeyError, TypeError,
                 CandleWindowError) as exc:
             report["status"] = "STOPPED_AT_FAILED_REQUEST"
             report["failure"] = {
+                "request_index_zero_based": request_index,
                 "stage": stage, "exception": type(exc).__name__,
                 "window_start": str(q.start), "window_end_exclusive": str(q.end),
                 "expiry_flag": q.expiry_flag, "expiry_code": q.expiry_code,
@@ -119,6 +135,10 @@ def run(args, *, client=None, sleeper=time.sleep):
                 report["failure"]["validation_rule"] = str(exc)
             break
         report["completed_api_requests"] += 1
+        report["next_request_index_zero_based"] = request_index + 1
+        report["last_completed_window_start"] = str(q.start)
+        report["last_completed_window_end_exclusive"] = str(q.end)
+        report["last_completed_series"] = entry["series"]
         report["empty_responses"] += int(frame.empty)
         report["rows_received"] += int(len(frame))
         del frame, raw
@@ -128,24 +148,38 @@ def run(args, *, client=None, sleeper=time.sleep):
                 file=sys.stderr,
             )
     else:
-        report["status"] = "COMPLETE_ROLLING_PROXY_ONLY"
+        report["status"] = ("COMPLETE_ROLLING_PROXY_ONLY" if start_request == 0
+                            else "PARTIAL_SKIPPED_EARLIER_REQUESTS")
     if report["status"] == "PREVIEW_NO_API_CALLS":
         report["status"] = "PARTIAL_MAX_REQUESTS"
-    report["discovery"] = summarize_scans(series_days, max_examples=args.max_examples)
-    if getattr(args, "vedic_transits", False):
-        report["transit_comparison"] = summarize_transit_impact(
-            transit_groups, max_samples=args.max_examples)
+    report["coverage_fraction_of_requested_calls"] = round(
+        report["completed_api_requests"] / planned, 6)
+    report["covered_entire_requested_universe"] = (
+        report["status"] == "COMPLETE_ROLLING_PROXY_ONLY"
+        and report["completed_api_requests"] == planned
+        and report["empty_responses"] == 0)
+    report["discovery"] = scan_summary.result()
+    if transit_summary is not None:
+        report["transit_comparison"] = transit_summary.result()
         report["transit_comparison"]["predictive_gamma_causation"] = None
     return report
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--from-date", type=date.fromisoformat, default=date(2026, 9, 1))
-    parser.add_argument("--through", type=date.fromisoformat, default=date(2026, 10, 9))
+    # Always target the latest five calendar years in NSE local time.
+    today_ist = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    parser.add_argument("--from-date", type=date.fromisoformat,
+                        default=five_year_start(today_ist))
+    parser.add_argument("--through", type=date.fromisoformat,
+                        default=today_ist)
     parser.add_argument("--full", action="store_true",
                         help="All listed ATM offsets/expiry buckets. Default only near ATM CE/PE.")
-    parser.add_argument("--max-requests", type=int, default=6)
+    parser.add_argument("--max-requests", type=int, default=None,
+                        help="Optional safety cap; omitting it allows ALL planned calls.")
+    parser.add_argument("--start-request", type=int, default=0,
+                        help="0-based offset for intentionally partial RAM-only runs. "
+                             "Separate runs cannot be combined automatically without persistence.")
     parser.add_argument("--horizon", type=int, choices=tuple(range(1, 121)), default=60)
     parser.add_argument("--min-price", type=float, default=2)
     parser.add_argument("--max-examples", type=int, default=12)
@@ -156,7 +190,8 @@ def main():
     parser.add_argument("--vedic-transits", action="store_true",
                         help="Also compute event/control associations near modeled transitions.")
     parser.add_argument("--execute", action="store_true",
-                        help="Authorize read-only Dhan API requests, never broker orders.")
+                        help="Authorize read-only Dhan API requests, never broker orders. "
+                             "The full 5Y+full universe can involve thousands of requests.")
     args = parser.parse_args()
     try:
         result = run(args)
