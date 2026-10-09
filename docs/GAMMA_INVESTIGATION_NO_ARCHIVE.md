@@ -35,7 +35,7 @@ The in-memory engine computes at each candidate minute t:
 - Current Gamma and 5-minute Gamma difference only if actual historical Greek series exists
 - Previous five-minute premium return (not future)
 - Hypothetical next-minute OPEN entry, then max next-horizon minute CLOSE over complete forward window within same session
-- Retrospective ≥3×/5×/10× close-multiple labels, and simple rates for volume acceleration ≥2× versus other eligible windows
+- Retrospective ≥2×/3×/5×/10× close-multiple labels, and separate rates for volume acceleration ≥2× versus other eligible windows (option premium 2× and volume 2× are different measures)
 
 These labels are descriptive opportunity upper bounds. The future best close is NOT known at time t, does not prove actual fill, is not fair value, cannot distinguish gamma from IV/delta/theta, and has severe overlapping-window dependency. Need many independent expiries and holdout testing to establish any useful early warning. No writes happen; a manual download CSV button is provided.
 
@@ -64,7 +64,7 @@ If you see HTTP 401/403 or an empty chain, first check that the freshly rotated 
 
 ## Repeatability study across actual fixed-contract option CSVs
 
-The third 3x/5x/10x events vs non-events tab runs
+The third 2x/3x/5x/10x events vs non-events tab runs
 app.research.gamma_event_study.investigate_events on multiple uploads IN MEMORY,
 with no file writing, no database, no JEV and no saved market history.
 
@@ -74,10 +74,10 @@ with no file writing, no database, no JEV and no saved market history.
 - Each candidate decision timestamp t needs 60 prior contiguous regular-session
   bars and a COMPLETE future 30m (configurable) path in the same session.
 - The entry benchmark is the NEXT minute OPEN, and the label is maximal
-  future minute CLOSE / that entry. These 3x/5x/10x retrospective opportunity
+  future minute CLOSE / that entry. These 2x/3x/5x/10x retrospective opportunity
   labels are NOT realized executable profits or evidence Gamma caused the rally.
-- Deduplicate positive episodes whose decision windows overlap.
-- Compare them with actual observed <3x controls from the SAME fixed option
+- Deduplicate ≥2× positive episodes whose decision windows overlap; the higher-tier 3×/5×/10× counts are nested within the selected ≥2× case cohort. This is a descriptive counting choice, not independent opportunities. Lowering the cohort entry threshold may change previously reported 3×+ counts because earliest-overlap selection changes.
+- Compare them with actual observed <2x controls from the SAME fixed option
   contract and same day within two hours and with entry premium between 0.5x
   and 2x of the case. Censor controls near ANY positive episode; never
   fabricate an unmatched control.
