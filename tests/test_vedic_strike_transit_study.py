@@ -69,7 +69,10 @@ def test_planet_star_change_maps_to_correct_22400_strike(monkeypatch):
     assert effect["proxy_2x_peak_close"] is False
     summary = astro.summarize_transit_impact([result])
     assert summary["eligible_strike_effect_windows"] == 1
+    assert summary["unique_session_planetary_transitions"] == 1
     assert summary["by_planet_change_side_strike_root"][0]["strike_root"] == 8
+    assert summary["by_exact_strike"][0]["strike_price"] == 22400
+    assert summary["by_exact_strike"][0]["compound_total"] == 8
     assert summary["independent_contracts_verified"] is False
 
 
@@ -168,3 +171,22 @@ def test_real_session_transits_when_optional_package_installed():
     assert isinstance(transits, list)
     assert all(t["planet"] in astro.PLANET_NAMES for t in transits)
     assert all("2026-10-09T" in t["calculated_transition_time_ist"] for t in transits)
+
+
+def test_numerology_root_baseline_reports_both_events_and_controls():
+    frame = stable()
+    summary = aggregate(study_chunk(frame))
+    groups = summary["strike_root_event_baseline"]["2x"]
+    assert groups["8"]["other"] == summary["labeled_rolling_proxy_windows"]
+    assert groups["8"]["event"] == 0
+
+
+def test_proxy_crossing_event_has_strike_compound_and_date_root():
+    frame = stable()
+    frame.loc[155, "close"] = 200
+    frame.loc[155, "high"] = 200
+    summary = aggregate(study_chunk(frame))
+    event = summary["first_crossing_examples"]["10x"][0]
+    assert event["strike_numerology"] == {
+        "strike_price": 22400, "compound_total": 8, "root_number": 8}
+    assert event["date_numerology"]["calendar_weekday"] == "Tuesday"
