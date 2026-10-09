@@ -210,3 +210,57 @@ def test_remote_checksums_disallow_silent_overwrite(tmp_path, monkeypatch):
 def test_quarter_and_date_validations():
     with pytest.raises(ValueError):
         archive.plan_quarters(date(2027, 1, 1), TODAY, today=TODAY)
+
+
+def test_manifested_partial_after_interrupted_upload_can_resume_without_dhan(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "_each_query", two_requests)
+    args = options(tmp_path)
+    args.execute = True
+    first = MockDhan()
+    def failed_upload(*_args):
+        raise RuntimeError("simulated Drive outage")
+    failure = archive.run(
+        args, client=first, verify_remote=False,
+        sleeper=lambda _: None, uploader=failed_upload)
+    assert failure["status"] == "STOPPED_PARTIAL_LOCAL_STAGING_RETAINED"
+    paths = list(Path(args.staging).iterdir())
+    assert len(paths) == 1 and paths[0].name.endswith(".zip")
+    # Simulate abrupt interruption after final manifest but before rename.
+    staged = paths[0].with_name(paths[0].name + ".partial")
+    paths[0].replace(staged)
+    second = MockDhan()
+    report = archive.run(
+        args, client=second, verify_remote=False, sleeper=lambda _: None,
+        uploader=lambda *_: "UPLOADED_MD5_VERIFIED")
+    assert report["status"] == "ALL_SELECTED_QUARTERS_UPLOADED"
+    assert report["archived_quarters"][0]["new_calls"] == 0
+    assert report["archived_quarters"][0]["resumed_completed_zip"] is True
+    assert len(second.calls) == 0
+    assert not list(Path(args.staging).iterdir())
+
+
+def test_empty_dhan_interval_is_disclosed_not_claimed_complete(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "_each_query", two_requests)
+    class EmptyForFiveMinute(MockDhan):
+        def _call(self, method, path, payload):
+            if payload["interval"] == "5":
+                self.calls.append(payload)
+                return {"data": {"ce": None}}
+            return super()._call(method, path, payload)
+    observed = []
+    def check_upload(file, remote):
+        with zipfile.ZipFile(file) as z:
+            meta = json.loads(z.read("manifest.json"))
+            observed.append(meta)
+        return "UPLOADED_MD5_VERIFIED"
+    args = options(tmp_path)
+    args.execute = True
+    report = archive.run(
+        args, client=EmptyForFiveMinute(), verify_remote=False,
+        sleeper=lambda _: None, uploader=check_upload)
+    assert report["status"] == "ALL_SELECTED_QUARTERS_UPLOADED"
+    assert observed[0]["empty_responses"] == 1
+    assert observed[0]["coverage_status"] == "PARTIAL_EMPTY_RESPONSES"
+    assert report["all_requested_quarters_covered"] is False
