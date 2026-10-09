@@ -148,8 +148,10 @@ def run(args, *, client=None, sleeper=time.sleep):
                 file=sys.stderr,
             )
     else:
-        report["status"] = ("COMPLETE_ROLLING_PROXY_ONLY" if start_request == 0
-                            else "PARTIAL_SKIPPED_EARLIER_REQUESTS")
+        report["status"] = (
+            "PARTIAL_SKIPPED_EARLIER_REQUESTS" if start_request
+            else ("COMPLETE_WITH_EMPTY_RESPONSES" if report["empty_responses"]
+                  else "COMPLETE_ROLLING_PROXY_ONLY"))
     if report["status"] == "PREVIEW_NO_API_CALLS":
         report["status"] = "PARTIAL_MAX_REQUESTS"
     report["coverage_fraction_of_requested_calls"] = round(
