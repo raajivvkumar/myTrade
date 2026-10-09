@@ -120,7 +120,7 @@ def test_authenticated_ram_only_one_response_no_files(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     client = MockClient()
     report = run(args(True, 1), client=client, sleeper=lambda _: None)
-    assert report["status"] == "PARTIAL_MAX_REQUESTS", report.get("failure")
+    assert report["status"] == "PARTIAL_MAX_REQUESTS", report.get("failure", {}).get("stage")
     assert report["completed_api_requests"] == 1
     assert report["rows_observed"] == 260
     assert report["market_files_saved"] == 0
