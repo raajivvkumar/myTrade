@@ -140,3 +140,31 @@ def test_missing_oi_not_misclassified_as_negative():
     metric = _cohort(data, list(data))["rules"]["volume2_oi10"]
     assert metric["missing_features"] == report["labeled_rolling_proxy_windows"]
     assert metric["thresholds"]["2x"]["tested_feature_complete_windows"] == 0
+
+
+def test_real_offline_ephemeris_coordinates_when_optional_package_installed():
+    pytest.importorskip("swisseph")
+    from datetime import datetime
+    from app.research.vedic_event_ephemeris import (
+        IST, sidereal_positions, RASHIS, NAKSHATRAS
+    )
+    stamp = datetime(2026, 10, 9, 11, 15, 23, tzinfo=IST)
+    report = sidereal_positions(stamp, precision="seconds")
+    assert report["timestamp_ist"] == "2026-10-09T11:15:23+05:30"
+    assert len(report["planets"]) == 9
+    assert report["planets"]["Moon"]["rashi"] in RASHIS
+    assert report["planets"]["Moon"]["nakshatra"] in NAKSHATRAS
+    assert 1 <= report["moon_nakshatra_pada"] <= 4
+    assert 1 <= report["vedic_panchang_indicators"]["tithi_ordinal_1_to_30"] <= 30
+    rahu = report["planets"]["Rahu"]["sidereal_longitude_degrees"]
+    ketu = report["planets"]["Ketu"]["sidereal_longitude_degrees"]
+    assert abs(((ketu - rahu) % 360) - 180) < 0.00001
+    assert report["calculation"] == "Swiss Ephemeris Moshier (offline analytical mode)"
+
+
+def test_real_session_transits_when_optional_package_installed():
+    pytest.importorskip("swisseph")
+    transits = astro.session_transits("2026-10-09")
+    assert isinstance(transits, list)
+    assert all(t["planet"] in astro.PLANET_NAMES for t in transits)
+    assert all("2026-10-09T" in t["calculated_transition_time_ist"] for t in transits)
