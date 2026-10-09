@@ -1,6 +1,6 @@
 """Offline synthetic tests for event-vs-comparable-non-event hypotheses.
 
-These tests deliberately do NOT imply the 3x or 5x patterns exist in real data.
+These tests deliberately do NOT imply 2x, 3x or 5x patterns exist in real data.
 """
 import pandas as pd
 import numpy as np
@@ -30,6 +30,7 @@ def contract(*, day="2026-10-08", expiry="2026-10-13",
 
 def test_one_realistic_synthetic_event_and_one_matched_control():
     event, ctrl, report = investigate_events([contract()], horizon=30)
+    assert report["observed_2x_events"] == 1
     assert report["observed_3x_events"] == 1
     assert report["observed_5x_events"] == 1
     assert report["observed_10x_events"] == 0
@@ -40,16 +41,36 @@ def test_one_realistic_synthetic_event_and_one_matched_control():
     assert len(event) == 1
     assert event.observed_close_multiple.iloc[0] == 5.5
     assert len(ctrl) == 1
-    assert ctrl.observed_close_multiple.iloc[0] < 3
+    assert ctrl.observed_close_multiple.iloc[0] < 2
+    assert ctrl.cohort.iloc[0] == "OBSERVED_BELOW_2X_MATCHED"
     assert ctrl.instrument_key.iloc[0] == event.instrument_key.iloc[0]
     assert ctrl.expiry.iloc[0] == event.expiry.iloc[0]
     assert "RETROSPECTIVE" in report["warning"] or "Event labels" in report["warning"]
+
+
+def test_2x_only_episode_is_positive_and_controls_are_below_2x():
+    data = contract(peak=None)
+    data.loc[135, "close"] = 10.0
+    data.loc[135, "high"] = 11.0
+    event, ctrl, report = investigate_events([data], horizon=30)
+    assert report["event_threshold_multiple"] == 2.0
+    assert report["observed_2x_events"] == 1
+    assert report["observed_3x_events"] == 0
+    assert report["observed_5x_events"] == 0
+    assert report["observed_10x_events"] == 0
+    assert len(event) == 1
+    assert event.observed_close_multiple.iloc[0] == 2.5
+    assert event.cohort.iloc[0] == "OBSERVED_2X_PLUS"
+    assert len(ctrl) == 1
+    assert (ctrl.observed_close_multiple < 2).all()
+    assert "volume_surge_2x" in report["repeated_patterns"]
 
 
 def test_no_event_reports_zero_without_fabrication():
     ev, ctrl, r = investigate_events([contract(peak=None)])
     assert ev.empty
     assert ctrl.empty
+    assert r["observed_2x_events"] == 0
     assert r["observed_3x_events"] == 0
     assert r["matched_controls"] == 0
     assert r["status"] == "INSUFFICIENT_DIVERSE_EVENTS_OR_MATCHED_CONTROLS"
