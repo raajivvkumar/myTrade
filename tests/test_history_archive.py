@@ -123,6 +123,21 @@ def test_offline_connect_policy_rejects_external_network():
             guard(sock, ("some.remote.example", 443))
 
 
+def test_offline_connect_policy_preserves_asyncio_socketpair(monkeypatch):
+    """Windows socketpair uses a local TCP connect; Unix uses local AF_UNIX."""
+    monkeypatch.setattr(
+        socket.socket, "connect",
+        _block_external_connect(socket.socket.connect),
+    )
+    left, right = socket.socketpair()
+    try:
+        left.sendall(b"ok")
+        assert right.recv(2) == b"ok"
+    finally:
+        left.close()
+        right.close()
+
+
 def test_offline_dashboard_browses_and_backtests_archive(monkeypatch, tmp_path):
     from pathlib import Path
     from streamlit.testing.v1 import AppTest
