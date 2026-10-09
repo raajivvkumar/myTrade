@@ -1,5 +1,6 @@
 """Offline five-year plan, integrity, coverage and research-claim checks."""
 from datetime import date, datetime
+import json
 
 import pandas as pd
 import pytest
@@ -192,3 +193,95 @@ def test_corrupt_cache_reports_failure_without_deleting_originals(monkeypatch, t
     output = (tmp_path / "history_summary.json").read_text()
     assert "CACHE_INTEGRITY_FAILED" in output
     assert '"collection_status": "PARTIAL"' in output
+
+
+def test_index_only_uses_same_index_entries_and_keeps_latest_first():
+    full = history.make_plan(date(2021, 10, 9), date(2026, 10, 9), ["ATM"], "WEEK", 0)
+    indices = history.make_plan(date(2021, 10, 9), date(2026, 10, 9), ["ATM"], "WEEK", 0,
+                                index_only=True)
+    assert len(indices) == 61
+    assert indices == full[::3]
+
+
+def test_option_api_failure_after_cached_index_is_actionable(monkeypatch, tmp_path):
+    monkeypatch.setattr(history.time, "sleep", lambda _: None)
+    history.collect(plan(), tmp_path, client=Client(), max_requests=1)
+    class OptionFailure(Client):
+        def _call(self, method, endpoint, payload):
+            assert endpoint == "/charts/rollingoption"
+            self.calls.append((method, endpoint))
+            raise history.DhanAPIError("HTTP_ERROR", http_status=400, provider_code="DH-905")
+    client = OptionFailure()
+    with pytest.raises(history.BackfillError) as raised:
+        history.collect(plan(), tmp_path, client=client)
+    error = raised.value.details
+    assert error["series"] == "WEEK_0_ATM_CALL"
+    assert error["stage"] == "REQUEST"
+    assert error["http_status"] == 400
+    assert error["provider_code"] == "DH-905"
+    report = json.loads((tmp_path / "history_summary.json").read_text())
+    assert report["completed_chunks"] == 1
+    assert report["errors"] == [error]
+    # Index-only progress must reuse the original index and retain the option failure.
+    calls = Client()
+    final = history.collect(plan()[::3], tmp_path, client=calls)
+    assert calls.calls == ["profile"]
+    assert final["collection_status"] == "FINISHED"
+    assert final["scope"] == "NIFTY 50 index only"
+    assert json.loads((tmp_path / "last_failure.json").read_text())["error"] == error
+
+
+def test_validation_failure_identifies_rule_without_saving_bad_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(history.time, "sleep", lambda _: None)
+    class InvalidBars(Client):
+        def _call(self, method, endpoint, payload):
+            raw = response()
+            raw["low"][0] = 200
+            return raw
+    with pytest.raises(history.BackfillError) as raised:
+        history.collect(plan(), tmp_path, client=InvalidBars())
+    assert raised.value.details["stage"] == "CANDLE_VALIDATION"
+    assert raised.value.details["validation_rule"] == "Invalid OHLC range"
+    assert not list(tmp_path.rglob("*.parquet"))
+
+
+def test_storage_failure_keeps_safe_errno_not_secret_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(history.time, "sleep", lambda _: None)
+    def full_disk(*args):
+        raise OSError(28, "synthetic-secret-path")
+    monkeypatch.setattr(history, "save_chunk", full_disk)
+    with pytest.raises(history.BackfillError) as raised:
+        history.collect(plan(), tmp_path, client=Client())
+    assert raised.value.details["stage"] == "CHUNK_STORAGE"
+    assert raised.value.details["errno"] == 28
+    assert "synthetic-secret" not in (tmp_path / "last_failure.json").read_text()
+
+
+def test_checkpoint_failure_does_not_hide_primary_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(history.time, "sleep", lambda _: None)
+    def locked_report(*args):
+        raise OSError(13, "synthetic-secret-path")
+    monkeypatch.setattr(history, "write_report", locked_report)
+    with pytest.raises(history.BackfillError) as raised:
+        history.collect(plan(), tmp_path, client=Client(fail=True))
+    assert raised.value.details["stage"] == "REQUEST"
+    assert raised.value.details["summary_write_failed"] is True
+    assert "synthetic-secret" not in str(raised.value)
+
+
+def test_cli_prints_safe_structured_failure(monkeypatch, tmp_path):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 9, 12, tzinfo=tz)
+    monkeypatch.setattr(history, "datetime", Clock)
+    monkeypatch.setattr(history, "load_local_credentials", lambda: None)
+    monkeypatch.setattr("sys.argv", ["history", "--through", "2026-10-09", "--execute"])
+    details = dict(stage="REQUEST", series="WEEK_0_ATM_CALL", http_status=400, provider_code="DH-905")
+    def fail(*args, **kwargs):
+        raise history.BackfillError(details, "synthetic-secret-error")
+    monkeypatch.setattr(history, "collect", fail)
+    with pytest.raises(SystemExit) as raised:
+        history.main()
+    assert '"provider_code": "DH-905"' in str(raised.value)
+    assert "synthetic-secret" not in str(raised.value)

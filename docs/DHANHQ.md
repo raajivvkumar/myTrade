@@ -130,3 +130,29 @@ FINISHED means all planned API windows were processed; it does not mean five yea
 Historical rolling responses provide OHLC, IV, OI, volume, spot and actual strike, not historical Gamma/Delta or a verified fixed security ID and expiry for every bar. The summary deliberately leaves fixed-contract 2x/3x/5x/10x event count null. Even an unchanged strike can roll to another expiry. Do not calculate those multipliers by stitching ATM prices, infer dealer positions from OI, or label correlation as Gamma causation.
 
 Share history_summary.json and daily_quality.csv for the next analysis. Retain raw chunks locally for detailed investigation; do not paste credentials or commit market-data archives. No five-year live dataset has yet been downloaded or analyzed in this agent session.
+
+## Diagnosing an interrupted historical run
+
+An INDEX cache hit confirms one existing index window passed the local cache checks, not that the next option request succeeded. Errors now identify the exact series, request dates, endpoint and failure stage. Broker errors retain HTTP status and a strictly formatted provider error code; broker errorMessage/errorType, headers and credentials are never copied. Candle validation failures name only controlled validation rules. Storage failures expose an errno without raw exception text or private paths.
+
+The most recent historical failure is saved separately to last_failure.json. It remains an earlier failure record even if a later index-only run succeeds or replaces history_summary.json. Diagnostic checkpoints are best effort; if storage itself is unavailable, the structured terminal error still preserves the original failure.
+
+Update and retry the original range:
+
+```bash
+git pull --ff-only
+python -m app.broker.dhan_history --through 2026-10-09 --execute
+cat data/raw/dhan/backfill/NIFTY/last_failure.json
+```
+
+Share the sanitized error output. Do not guess whether expiry code, entitlement, timestamps or local storage caused the failure before inspecting the diagnostic.
+
+If rolling options are blocked, the independent index history can still proceed:
+
+```bash
+python -m app.broker.dhan_history --through 2026-10-09 --index-only --execute
+```
+
+This uses the same 61 index windows and verifies/reuses existing index chunks. It makes no rolling-option requests and cannot establish option Gamma fingerprints. The summary describes the current run's selected scope; prior chunks and last_failure.json remain on disk.
+
+Provider error-code meanings are documented at https://dhanhq.co/docs/v2/annexure/. For example DH-905 denotes invalid/missing request inputs; DH-907 can mean incorrect parameters or unavailable data. A diagnostic code is evidence for investigation, not an automatic permission to bypass provider limits or fabricate missing candles.

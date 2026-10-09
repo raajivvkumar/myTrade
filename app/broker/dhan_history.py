@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from app.broker.dhan_cli import load_local_credentials
-from app.broker.dhan_historical import DhanClient, RollingQuery, STRIKE_RE
+from app.broker.dhan_historical import DhanAPIError, DhanClient, RollingQuery, STRIKE_RE
 
 IST = ZoneInfo("Asia/Kolkata")
 VERSION = 1
@@ -46,7 +46,7 @@ def index_payload(start, end):
                 toDate=f"{end} 00:00:00")
 
 
-def make_plan(start, through, strikes, expiry_flag, expiry_code):
+def make_plan(start, through, strikes, expiry_flag, expiry_code, *, index_only=False):
     if not strikes or len(set(strikes)) != len(strikes):
         raise ValueError("Provide distinct relative strikes")
     for strike in strikes:
@@ -56,6 +56,8 @@ def make_plan(start, through, strikes, expiry_flag, expiry_code):
     for beginning, end in backward_windows(start, through + timedelta(days=1)):
         entries.append(dict(series="INDEX", start=str(beginning), end=str(end),
                             endpoint="/charts/intraday", payload=index_payload(beginning, end)))
+        if index_only:
+            continue
         for strike in strikes:
             for side in ("CALL", "PUT"):
                 query = RollingQuery(beginning, end, expiry_flag=expiry_flag,
@@ -267,10 +269,65 @@ def write_report(root, entries, completed, errors):
                    fixed_contract_multiplier_event_count=None,
                    gamma_causation_established=False,
                    gamma_research_blocker="Rolling strike/expiry continuity is unverified; no fixed-contract 2x/3x/5x/10x events inferred",
-                   scope="NIFTY 50 index plus selected rolling relative strikes, expiry flag and expiry code",
+                   scope=("NIFTY 50 index only" if all(e["series"] == "INDEX" for e in entries)
+                          else "NIFTY 50 index plus selected rolling relative strikes, expiry flag and expiry code"),
                    note="Missing minutes refer only to observed dates; weekends, holidays, special sessions and absent dates are not authenticated.")
     atomic_json(root / "history_summary.json", summary)
     return summary
+
+
+
+class BackfillError(RuntimeError):
+    """A safe failure description assembled from controlled local fields."""
+
+    def __init__(self, details, message):
+        self.details = details
+        super().__init__(message)
+
+
+VALIDATION_RULES = {
+    "Missing rolling-option data object", "Candle source must be an object",
+    "Missing candle arrays", "Candle array lengths differ",
+    "Optional candle array lengths differ", "Invalid epoch timestamp",
+    "Boolean candle values", "Invalid numeric candle values",
+    "Missing timestamp or OHLC", "Non-positive or missing OHLC/strike",
+    "Invalid OHLC range", "Negative volume, OI or IV",
+    "Duplicate or out-of-order timestamps",
+    "Provider returned timestamps outside request window", "Non-minute timestamp",
+}
+
+
+def failure_details(entry, stage, exc):
+    item = dict(series=entry["series"], start=entry["start"], end=entry["end"],
+                endpoint=entry["endpoint"], stage=stage,
+                reason="REQUEST_OR_VALIDATION_FAILED")
+    if isinstance(exc, DhanAPIError):
+        item.update(exc.diagnostic())
+    elif isinstance(exc, OSError):
+        item["reason"] = "LOCAL_IO_FAILED"
+        item["errno"] = exc.errno if type(exc.errno) is int else None
+    elif stage == "CANDLE_VALIDATION":
+        item["reason"] = "CANDLE_VALIDATION_FAILED"
+        rule = str(exc)
+        item["validation_rule"] = rule if rule in VALIDATION_RULES else "UNCLASSIFIED_VALIDATION"
+    elif stage == "CACHE":
+        item["reason"] = "CACHE_INTEGRITY_FAILED"
+    return item
+
+
+def stop_with_report(root, entries, completed, errors, details, message):
+    errors.append(details)
+    # Retain the last failure even if a later index-only run replaces the summary.
+    try:
+        atomic_json(root / "last_failure.json",
+                    dict(failed_at_ist=datetime.now(IST).isoformat(), error=details))
+    except (OSError, ValueError):
+        details["failure_file_write_failed"] = True
+    try:
+        write_report(root, entries, completed, errors)
+    except (OSError, ValueError):
+        details["summary_write_failed"] = True
+    raise BackfillError(details, message) from None
 
 
 def collect(entries, root, *, client=None, pause_seconds=1, max_requests=None, retry_empty=False):
@@ -287,11 +344,10 @@ def collect(entries, root, *, client=None, pause_seconds=1, max_requests=None, r
     for entry in entries:
         try:
             cache = load_cached(root, entry, retry_empty=retry_empty)
-        except (ValueError, OSError):
-            errors.append(dict(series=entry["series"], start=entry["start"], end=entry["end"],
-                               reason="CACHE_INTEGRITY_FAILED"))
-            write_report(root, entries, completed, errors)
-            raise RuntimeError("Cached data failed integrity checks. Files were retained; see history_summary.json") from None
+        except (ValueError, OSError) as exc:
+            stop_with_report(root, entries, completed, errors,
+                             failure_details(entry, "CACHE", exc),
+                             "Cached data failed integrity checks. Files were retained")
         if cache is not None:
             completed.append(cache)
             print(f'SKIP cached {entry["series"]}: {entry["start"]} to {entry["end"]}', file=sys.stderr)
@@ -301,18 +357,20 @@ def collect(entries, root, *, client=None, pause_seconds=1, max_requests=None, r
             continue
         time.sleep(pause_seconds)
         calls += 1
+        stage = "REQUEST"
         try:
             raw = client._call("POST", entry["endpoint"], entry["payload"])
+            stage = "CANDLE_VALIDATION"
             frame = parse_bars(raw, entry)
+            stage = "CHUNK_STORAGE"
             completed.append(save_chunk(root, entry, raw, frame))
             print(f'SAVED {entry["series"]}: {entry["start"]} to {entry["end"]}, {len(frame)} rows', file=sys.stderr)
-        except (RuntimeError, ValueError):
-            # Never include broker/network exception text or request headers in reports.
-            errors.append(dict(series=entry["series"], start=entry["start"], end=entry["end"],
-                               reason="REQUEST_OR_VALIDATION_FAILED"))
+            stage = "REPORT_STORAGE"
             write_report(root, entries, completed, errors)
-            raise RuntimeError("Backfill stopped after a request or validation error. Earlier chunks remain resumable; see history_summary.json") from None
-        write_report(root, entries, completed, errors)
+        except (RuntimeError, ValueError, OSError) as exc:
+            stop_with_report(root, entries, completed, errors,
+                             failure_details(entry, stage, exc),
+                             "Backfill stopped. Earlier chunks remain resumable")
     return write_report(root, entries, completed, errors)
 
 
@@ -327,6 +385,7 @@ def main():
     parser.add_argument("--pause-seconds", type=float, default=1)
     parser.add_argument("--max-requests", type=int)
     parser.add_argument("--retry-empty", action="store_true")
+    parser.add_argument("--index-only", action="store_true", help="Collect index history independently of rolling options")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     try:
@@ -334,7 +393,8 @@ def main():
         start = args.from_date or five_year_start(args.through)
         if args.through > today or start < five_year_start(today):
             raise ValueError("Choose a past/current range within Dhan's latest five-year window")
-        entries = make_plan(start, args.through, [s.upper() for s in args.strikes], args.expiry_flag, args.expiry_code)
+        entries = make_plan(start, args.through, [s.upper() for s in args.strikes], args.expiry_flag,
+                            args.expiry_code, index_only=args.index_only)
         if not args.execute:
             print(json.dumps(dict(mode="DRY_RUN", requested_from=str(start), requested_through=str(args.through),
                                   planned_data_requests=len(entries), order="NEWEST_FIRST",
@@ -344,8 +404,17 @@ def main():
         report = collect(entries, args.output_dir, pause_seconds=args.pause_seconds,
                          max_requests=args.max_requests, retry_empty=args.retry_empty)
         print(json.dumps(report, indent=2, allow_nan=False))
-    except (RuntimeError, ValueError, OSError):
-        raise SystemExit("Dhan history failed. Check token/plan, dates, provider availability, disk access and history_summary.json; credentials were not printed.") from None
+    except BackfillError as exc:
+        raise SystemExit("Dhan history stopped: " + json.dumps(exc.details) +
+                         ". Earlier chunks remain cached; see last_failure.json and history_summary.json.") from None
+    except DhanAPIError as exc:
+        raise SystemExit("Dhan profile failed: " + json.dumps(exc.diagnostic())) from None
+    except OSError as exc:
+        details = dict(stage="LOCAL_SETUP_OR_REPORT_STORAGE", reason="LOCAL_IO_FAILED",
+                       errno=exc.errno if type(exc.errno) is int else None)
+        raise SystemExit("Dhan history failed: " + json.dumps(details)) from None
+    except (RuntimeError, ValueError):
+        raise SystemExit("Dhan history failed during setup/input validation. Check token/plan and dates; credentials were not printed.") from None
 
 
 if __name__ == "__main__":

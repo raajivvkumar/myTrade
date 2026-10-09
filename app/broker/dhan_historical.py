@@ -16,6 +16,37 @@ FIELDS = ["open", "high", "low", "close", "iv", "volume", "strike", "oi", "spot"
 STRIKE_RE = re.compile(r"ATM(?:[+-](?:[1-9]|10))?$")
 
 
+class DhanAPIError(RuntimeError):
+    """Only controlled diagnostics; never store headers or broker free text."""
+
+    def __init__(self, category, *, http_status=None, provider_code=None):
+        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
+        messages = {
+            "NETWORK_ERROR": "DhanHQ network/timeout error",
+            "HTTP_ERROR": f"DhanHQ HTTP {self.http_status}; verify access token, plan and limits",
+            "INVALID_JSON": "Invalid JSON from DhanHQ",
+            "API_ERROR": "DhanHQ unsuccessful response; check plan or request parameters",
+        }
+        self.category = category if category in messages else "API_ERROR"
+        self.provider_code = safe_provider_code(provider_code)
+        super().__init__(messages[self.category] +
+                         (f"; provider code {self.provider_code}" if self.provider_code else ""))
+
+    def diagnostic(self):
+        return dict(reason=self.category, http_status=self.http_status,
+                    provider_code=self.provider_code)
+
+
+def safe_provider_code(value):
+    # Official Dhan error codes are numeric or DH-NNN, never arbitrary messages.
+    text = str(value) if type(value) in (str, int) else ""
+    return text if re.fullmatch(r"(?:DH-)?[0-9]{3}", text) else None
+
+
+def response_error_code(data):
+    return safe_provider_code(data.get("errorCode")) if isinstance(data, dict) else None
+
+
 @dataclass(frozen=True)
 class RollingQuery:
     start: date
@@ -115,16 +146,24 @@ class DhanClient:
         try:
             resp = self.session.request(method, URL + path, headers=headers, json=payload,
                                         timeout=30, allow_redirects=False)
-        except requests.RequestException as exc:
-            raise RuntimeError("DhanHQ network/timeout error") from exc
+        except requests.RequestException:
+            raise DhanAPIError("NETWORK_ERROR") from None
         if resp.status_code != 200:
-            raise RuntimeError(f"DhanHQ HTTP {resp.status_code}; verify access token, plan and limits")
+            try:
+                error_data = resp.json()
+            except (ValueError, AttributeError):
+                error_data = None
+            raise DhanAPIError("HTTP_ERROR", http_status=resp.status_code,
+                               provider_code=response_error_code(error_data)) from None
         try:
             data = resp.json()
-        except ValueError as exc:
-            raise RuntimeError("Invalid JSON from DhanHQ") from exc
-        if not isinstance(data, dict) or str(data.get("status", "")).lower() in ("failed", "failure", "error"):
-            raise RuntimeError("DhanHQ unsuccessful response; check plan or request parameters")
+        except ValueError:
+            raise DhanAPIError("INVALID_JSON", http_status=resp.status_code) from None
+        if (not isinstance(data, dict)
+                or str(data.get("status", "")).lower() in ("failed", "failure", "error")
+                or data.get("errorCode") not in (None, "", 0, "0")):
+            raise DhanAPIError("API_ERROR", http_status=resp.status_code,
+                               provider_code=response_error_code(data)) from None
         return data
 
     def profile(self):
