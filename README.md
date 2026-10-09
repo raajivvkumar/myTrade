@@ -555,3 +555,32 @@ so keep independent backups. Archived datasets support future research and model
 validation; this change does not automatically retrain a model or promise improved
 predictions. The separately hosted Candle Lab is not synchronized with this local
 Python archive; exported CSVs can be loaded there.
+
+
+## Upstox read-only expired NIFTY option research
+
+MyTrade now supports a separate GET-only Upstox Plus fixed-contract historical data importer. Each output retains expiry, strike, CE/PE, lot size and instrument key. Dry-run does not need credentials:
+
+    python -m app.broker.upstox_cli probe --expiry 2026-03-24 --strike 23000 --side PE
+
+After manual token setup, use Upstox Plus and add --execute to fetch a small sample. Outputs remain UNVALIDATED pending independent NSE checks; they are not automatically put into the trusted history archive. **Do not assume five years of fixed-contract minute data**: the official expiry-list API advertises up to six months. See docs/UPSTOX.md for limitations and the test sequence. Existing Angel broker functionality remains unchanged.
+
+
+## Upstox Basic: FREE historical NIFTY index candles (Analytics Token)
+
+Without switching to Plus, you can start NIFTY 1-minute **underlying index** research using Upstox's one-year free read-only Analytics Token and Historical Candle V3. First preview has no network: `python -m app.broker.upstox_index_cli --from-date 2026-03-23 --to-date 2026-03-24`. After setting `UPSTOX_ANALYTICS_TOKEN` in your local `.env`, add `--execute` for one GET-only sample. Index OHLC is **not** expired option premium data; do not compute options Gamma Multiplier returns from this alone. Read [Basic Analytics setup](docs/UPSTOX_ANALYTICS.md). The Upstox Plus importer remains separate.
+
+
+## Broker-independent private 1-minute data archive
+
+Successful Upstox Analytics V3 index downloads now automatically create a second independent local mirror at ../MyTradeOfflineArchive/upstox_index_v3 with immutable Parquet, JSON provenance and SHA256 catalogue. Run python -m app.data.market_archive verify without an Upstox login, and optionally upload via privately configured rclone Google Drive. Instructions: docs/MARKET_DATA_ARCHIVE.md. The Google Drive folder is https://drive.google.com/drive/folders/1jH6SgOQJdt9pwF1XCWPMxiGfm9otRWVf . Currently no live data has been downloaded, and this index source is NOT historical option-contract premiums.
+
+
+## Quality-audit the NIFTY 1-minute history without a broker login
+
+After a successful index download, run `python -m app.data.market_archive verify` and `python -m app.data.index_quality`. This produces `../MyTradeOfflineArchive/reports/nifty_1minute_quality.json` and `nifty_1minute_sessions.csv`, checking per-session 1-minute gaps, conflicting duplicates, OHLC values, source metadata and backup checksums. For ordinary full NSE sessions, the assumed grid is 09:15–15:29 IST (375 minutes), but special sessions and completely absent exchange days require an official session calendar. Results remain UNVALIDATED unless independently checked. See [NIFTY Data Quality Guide](docs/INDEX_DATA_QUALITY.md) and optionally supply an independent 1-minute CSV via `--reference-csv`. No Upstox token or API call is needed for this audit.
+
+
+## Gamma Multiplier Fingerprint Research — offline Phase 1
+
+A new non-trading gamma research sandbox lets us identify *NIFTY index* 1-minute precursors using only previously completed bars and then, **only if one verified fixed-contract CE/PE option Parquet is available**, test historical 3x/5x/10x option premium outcomes. Default index scanner runs without any broker token: `python -m app.research.gamma_cli`. Results are saved under `../MyTradeOfflineArchive/research/gamma_fingerprints` and explicitly labeled **exploratory/unvalidated**. Next-minute open is the hypothetical entry benchmark, while the maximum future minute close is a retrospective opportunity measure, never a realizable trading P&L. Read [Research Hypotheses and Limits](docs/GAMMA_FINGERPRINT_RESEARCH.md). Do not infer Gamma events or predictive edge from NIFTY index prices alone.
