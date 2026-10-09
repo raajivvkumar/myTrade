@@ -12,6 +12,11 @@ from zoneinfo import ZoneInfo
 IST = ZoneInfo("Asia/Kolkata")
 RASHIS = ("Mesha", "Vrishabha", "Mithuna", "Karka", "Simha", "Kanya",
           "Tula", "Vrishchika", "Dhanu", "Makara", "Kumbha", "Meena")
+YOGAS = ("Vishkambha", "Priti", "Ayushman", "Saubhagya", "Shobhana",
+         "Atiganda", "Sukarma", "Dhriti", "Shula", "Ganda", "Vriddhi",
+         "Dhruva", "Vyaghata", "Harshana", "Vajra", "Siddhi", "Vyatipata",
+         "Variyana", "Parigha", "Shiva", "Siddha", "Sadhya", "Shubha",
+         "Shukla", "Brahma", "Indra", "Vaidhriti")
 NAKSHATRAS = ("Ashwini", "Bharani", "Krittika", "Rohini", "Mrigashira",
               "Ardra", "Punarvasu", "Pushya", "Ashlesha", "Magha",
               "Purva Phalguni", "Uttara Phalguni", "Hasta", "Chitra",
@@ -48,7 +53,7 @@ def _positions_at_ist(iso_minute):
         import swisseph as swe
     except ImportError as exc:
         raise RuntimeError(
-            "Vedic positions require optional pyswisseph: python -m pip install pyswisseph"
+            "Vedic positions require optional pysweph: python -m pip install pysweph"
         ) from exc
     stamp = datetime.fromisoformat(iso_minute)
     if stamp.tzinfo is None:
@@ -76,6 +81,14 @@ def _positions_at_ist(iso_minute):
         rahu + 180, -1.0 if planets["Rahu"].get("retrograde") else 1.0)
     nakshatra_index = NAKSHATRAS.index(planets["Moon"]["nakshatra"])
     pada = planets["Moon"]["nakshatra_pada"]
+    elongation = (
+        planets["Moon"]["sidereal_longitude_degrees"]
+        - planets["Sun"]["sidereal_longitude_degrees"]) % 360
+    tithi = int(elongation // 12) + 1
+    yoga_angle = (
+        planets["Moon"]["sidereal_longitude_degrees"]
+        + planets["Sun"]["sidereal_longitude_degrees"]) % 360
+    yoga = YOGAS[min(26, int(yoga_angle / (360 / 27)))]
     return {
         "timestamp_ist": iso_minute,
         "zodiac": "Vedic sidereal Lahiri",
@@ -83,6 +96,13 @@ def _positions_at_ist(iso_minute):
         "rahu_ketu_policy": "Mean Rahu; Ketu exactly opposite",
         "moon_nakshatra": NAKSHATRAS[nakshatra_index],
         "moon_nakshatra_pada": pada,
+        "vedic_panchang_indicators": {
+            "weekday_ist": stamp.strftime("%A"),
+            "tithi_ordinal_1_to_30": tithi,
+            "paksha": "Shukla" if tithi <= 15 else "Krishna",
+            "yoga": yoga,
+            "note": "Geocentric tithi/yoga at timestamp, not a location-based sunrise Panchang",
+        },
         "planets": planets,
     }
 
