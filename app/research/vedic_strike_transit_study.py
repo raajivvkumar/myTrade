@@ -193,7 +193,9 @@ def transit_strike_observations(frame, *, series, expiry_flag, expiry_code):
                     controls.append(control["premium_change_post30_pct"])
             control_mean = (round(sum(controls) / len(controls), 4)
                             if controls else None)
+            chart = sidereal_positions(t, precision="seconds")
             observations.append({
+                "vedic_chart_at_transition": chart,
                 "controls_available": len(controls),
                 "control_mean_post30_pct": control_mean,
                 "excess_post30_vs_control_pct_points": (
