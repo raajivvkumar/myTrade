@@ -179,7 +179,26 @@ def transit_strike_observations(frame, *, series, expiry_flag, expiry_code):
                 reason = effect["reason"]
                 censored[reason] = censored.get(reason, 0) + 1
                 continue
+            # Compare with predeclared same-strike, same-side control windows.
+            # +/-60 minutes is descriptive only: not an independent holdout.
+            controls = []
+            for delta in (-60, 60):
+                control_pivot = pivot + pd.Timedelta(minutes=delta)
+                control_bar = g.loc[g.timestamp == control_pivot]
+                if (control_bar.empty
+                        or float(control_bar.actual_strike.iloc[0]) != strike):
+                    continue
+                control = _window_effect(g, control_pivot, strike=strike)
+                if control["reason"] is None:
+                    controls.append(control["premium_change_post30_pct"])
+            control_mean = (round(sum(controls) / len(controls), 4)
+                            if controls else None)
             observations.append({
+                "controls_available": len(controls),
+                "control_mean_post30_pct": control_mean,
+                "excess_post30_vs_control_pct_points": (
+                    round(effect["premium_change_post30_pct"] - control_mean, 4)
+                    if control_mean is not None else None),
                 "date": str(day),
                 "planet": transit["planet"],
                 "transition_type": transit["transition_type"],
@@ -200,7 +219,7 @@ def transit_strike_observations(frame, *, series, expiry_flag, expiry_code):
             })
     return {
         "transit_calendar": transit_calendar[:200],
-        "observations": observations[:200],
+        "observations": observations,
         "censored": censored,
         "total_transit_instances": len(transit_calendar),
         "eligible_transit_strike_observations": len(observations),
@@ -224,6 +243,7 @@ def summarize_transit_impact(groups, *, max_samples=60):
         for reason, count in group["censored"].items():
             censored[reason] = censored.get(reason, 0) + count
     buckets = {}
+    strike_buckets = {}
     for x in merged:
         key = (x["planet"], x["transition_type"], x["option_side"],
                x["strike"]["root_number"])
@@ -235,6 +255,17 @@ def summarize_transit_impact(groups, *, max_samples=60):
         item["sum_post30_pct"] += x["premium_change_post30_pct"]
         item["sum_peak_ratio"] += x["peak_close_to_start_ratio"]
         item["strike_examples"].add(x["strike"]["strike_price"])
+        exact_key = (x["planet"], x["transition_type"], x["option_side"],
+                     x["strike"]["strike_price"])
+        exact = strike_buckets.setdefault(exact_key, {
+            "count": 0, "proxy_2x": 0, "sum_post30_pct": 0.0,
+            "controls": 0, "sum_excess": 0.0})
+        exact["count"] += 1
+        exact["proxy_2x"] += int(x["proxy_2x_peak_close"])
+        exact["sum_post30_pct"] += x["premium_change_post30_pct"]
+        if x["controls_available"]:
+            exact["controls"] += 1
+            exact["sum_excess"] += x["excess_post30_vs_control_pct_points"]
     result = []
     for (planet, change, side, root), stat in sorted(buckets.items()):
         n = stat["observations"]
@@ -245,13 +276,35 @@ def summarize_transit_impact(groups, *, max_samples=60):
             "mean_peak_close_ratio": round(stat["sum_peak_ratio"] / n, 4),
             "example_strikes": sorted(stat["strike_examples"])[:12],
         })
+    exact_groups = []
+    for (planet, change, side, strike_price), counts in sorted(
+            strike_buckets.items()):
+        n = counts["count"]
+        numerology = compound_number(strike_price)
+        exact_groups.append({
+            "planet": planet, "transition_type": change,
+            "option_side": side, "strike_price": strike_price,
+            "compound_total": numerology["compound_total"],
+            "root_number": numerology["root_number"],
+            "observations": n,
+            "proxy_2x": counts["proxy_2x"],
+            "mean_post30_pct": round(counts["sum_post30_pct"] / n, 4),
+            "matched_control_observations": counts["controls"],
+            "mean_excess_vs_controls_pct_points": (
+                round(counts["sum_excess"] / counts["controls"], 4)
+                if counts["controls"] else None),
+        })
+    exact_groups.sort(key=lambda x: (
+        -x["observations"], x["planet"], x["strike_price"]))
     return {
         "transit_instances_across_aliases": instances,
         "eligible_strike_effect_windows": eligible,
         "censor_reasons": censored,
         "by_planet_change_side_strike_root": result,
+        "by_exact_strike": exact_groups[:100],
+        "total_exact_strike_groups": len(exact_groups),
         "first_examples": merged[:max_samples],
         "independent_contracts_verified": False,
         "predictive_significance": None,
-        "note": "Exploratory associations; compare against time-of-day/moneyness-matched non-transit controls before claiming edge.",
+        "note": "Exploratory associations. Control windows are +/-60m within same day/strike/side, not independent holdout; adjust for moneyness, time, volatility and correlated aliases before significance.",
     }
