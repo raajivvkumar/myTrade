@@ -135,9 +135,9 @@ def evaluate_frozen_fingerprints(
     }
     if candidate_windows is None or candidate_windows.empty:
         return report
-    missing = set(IDENTITY) | {
+    missing = (set(IDENTITY) | {
         f"observed_ge_{m}x" for m in MULTIPLIERS
-    } - set(candidate_windows.columns)
+    }) - set(candidate_windows.columns)
     if missing:
         raise ValueError("Candidate windows missing identity/labels: " + ", ".join(sorted(missing)))
     if candidate_windows.duplicated(list(IDENTITY)).any():
@@ -175,7 +175,7 @@ def evaluate_frozen_fingerprints(
     ].copy()
     grid = grid.sort_values(["_expiry_day", "instrument_key", "_signal_dt"])
     report["sampled_nonoverlapping_decision_windows"] = len(grid)
-    expiry_values = sorted(str(x.date()) for x in grid["_expiry_day"].unique())
+    expiry_values = sorted(pd.Timestamp(x).date().isoformat() for x in grid["_expiry_day"].unique())
     report["independent_expiries"] = len(expiry_values)
     if len(expiry_values) < MIN_SPLIT_EXPIRIES:
         return report
