@@ -40,6 +40,11 @@ No caching means subsequent runs re-request the data.
 
 ## What this actually analyzes
 
+Descriptive event-versus-non-event cohort means and feature denominators are also
+calculated in RAM for previous 5m IV change, spot move, strike/spot moneyness,
+volume acceleration, premium momentum and OI change. These are observational,
+not feature-selection evidence or claims of causality.
+
 Frozen pre-event hypotheses:
 1. 5-minute option premium momentum >=20 percent;
 2. recent 5-minute average volume at least double the previous 30-minute
