@@ -240,9 +240,12 @@ def run(args, client=None, sleeper=clock.sleep):
         entry = {"series": f"{q.expiry_flag}_{q.expiry_code}_{q.strike}_{q.side}",
                  "start": str(q.start), "end": str(q.end),
                  "payload": q.payload(), "endpoint": "/charts/rollingoption"}
+        stage = "REQUEST"
         try:
             raw = client._call("POST", "/charts/rollingoption", q.payload())
+            stage = "VALIDATE_BARS"
             frame = parse_bars(raw, entry)
+            stage = "PROXY_RESEARCH"
             if not frame.empty:
                 merge_day(dates, study_chunk(frame, args.horizon, args.min_price))
         except (DhanAPIError, ValueError, KeyError, TypeError) as error:
@@ -250,7 +253,7 @@ def run(args, client=None, sleeper=clock.sleep):
             report["failure"] = {"start": str(q.start), "end_exclusive": str(q.end),
                                  "expiry_flag": q.expiry_flag, "expiry_code": q.expiry_code,
                                  "strike": q.strike, "side": q.side,
-                                 "reason": type(error).__name__}
+                                 "reason": type(error).__name__, "stage": stage}
             if isinstance(error, DhanAPIError):
                 report["failure"]["dhan"] = error.diagnostic()
             break
