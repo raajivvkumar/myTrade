@@ -104,11 +104,11 @@ def _features(bars, index):
         "volume5_vs_previous10": vol,
         "oi5m_pct": oi_change,
         "signals": {
-            "premium20": None if mom is None else mom >= 20,
+            "premium20": None if mom is None else bool(mom >= 20),
             "volume2_premium20": (None if mom is None or vol is None
-                                   else mom >= 20 and vol >= 2),
+                                   else bool(mom >= 20 and vol >= 2)),
             "volume2_oi10": (None if vol is None or oi_change is None
-                              else vol >= 2 and oi_change >= 10),
+                              else bool(vol >= 2 and oi_change >= 10)),
         },
     }
 
