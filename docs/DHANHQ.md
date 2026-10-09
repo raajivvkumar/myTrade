@@ -175,3 +175,13 @@ python -m app.broker.dhan_history --through 2026-10-09 --expiry-code 1 --execute
 ```
 
 Existing index entries are identical and their caches are reused. Legacy option code-0 chunks, if any, remain untouched and are never silently renamed into code-1 chunks. Changing from code 0 to code 1 is an actual request correction, not relabeling previously collected contracts. A real successful option response still needs to be observed; offline tests alone do not establish live provider success or fixed-contract identity.
+
+## Rolling response window boundaries
+
+The collector's logical intervals remain start-inclusive and end-exclusive. If a rolling response includes bars on the end calendar date, those adjacent-day rows are excluded from the current Parquet/daily facts and counted explicitly. The untouched raw JSON.gz preserves them. This is response normalization, not a timestamp shift or proof that the provider follows its documented exclusive-end convention.
+
+Manifests retain requested and returned IST bounds, returned/included counts and excluded_end_date_rows. Progress output and history_summary.json expose exclusions. An end-date-only response yields an EMPTY chunk and remains visible as incomplete source coverage. Earlier successfully validated caches remain reusable.
+
+Rolling rows before the requested start or on dates after the end calendar date still stop collection. Index requests retain strict bounds. Unexpected-window errors now include first/last returned IST timestamps and counts before/at/after the boundary, without broker messages or credentials. Numeric, OHLC, duplicate, ordering and minute-granularity checks still apply to the entire response before end-date exclusion.
+
+Observed live status: after the expiry-code correction, the user reached cached INDEX/CALL/PUT entries for 2026-09-10 to 2026-10-10 and a cached older INDEX entry. The older CALL response stopped under the previous strict date-boundary check. Its actual offending timestamps have not yet been shared; end-date inclusion is a hypothesis until the updated progress output or diagnostics show the source bounds.

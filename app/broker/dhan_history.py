@@ -68,6 +68,31 @@ def make_plan(start, through, strikes, expiry_flag, expiry_code, *, index_only=F
     return entries
 
 
+
+class CandleWindowError(ValueError):
+    """Controlled timestamp diagnostics for an unexpected provider window."""
+
+    def __init__(self, details):
+        self.details = details
+        super().__init__("Provider returned timestamps outside request window")
+
+
+def window_facts(frame, entry):
+    lower, upper = pd.Timestamp(entry["start"]), pd.Timestamp(entry["end"])
+    stamps = frame.timestamp
+    def iso(value):
+        return value.tz_localize("Asia/Kolkata").isoformat() if not pd.isna(value) else None
+    return dict(
+        requested_start_ist=iso(lower), requested_end_exclusive_ist=iso(upper),
+        returned_rows=len(frame),
+        first_returned_timestamp_ist=iso(stamps.min()),
+        last_returned_timestamp_ist=iso(stamps.max()),
+        before_start_rows=int((stamps < lower).sum()),
+        end_date_rows=int(((stamps >= upper) & (stamps < upper + pd.Timedelta(days=1))).sum()),
+        after_end_date_rows=int((stamps >= upper + pd.Timedelta(days=1)).sum()),
+    )
+
+
 def parse_bars(raw, entry):
     rolling = entry["series"] != "INDEX"
     if rolling:
@@ -119,14 +144,26 @@ def parse_bars(raw, entry):
         raise ValueError("Negative volume, OI or IV")
     if frame.timestamp.duplicated().any() or not frame.timestamp.is_monotonic_increasing:
         raise ValueError("Duplicate or out-of-order timestamps")
-    lower, upper = pd.Timestamp(entry["start"]), pd.Timestamp(entry["end"])
-    if ((frame.timestamp < lower) | (frame.timestamp >= upper)).any():
-        raise ValueError("Provider returned timestamps outside request window")
     if (frame.timestamp.dt.second.ne(0) | frame.timestamp.dt.microsecond.ne(0)).any():
         raise ValueError("Non-minute timestamp")
+    bounds = window_facts(frame, entry)
+    upper = pd.Timestamp(entry["end"])
+    if (bounds["before_start_rows"] or bounds["after_end_date_rows"]
+            or (not rolling and bounds["end_date_rows"])):
+        raise CandleWindowError(bounds)
+    # Preserve all source bars in raw JSON. The exclusive logical window excludes
+    # the end calendar date if rolling data happens to return that adjacent day.
+    # Never shift timestamps or admit unexpected dates before/after this boundary.
+    excluded = bounds["end_date_rows"] if rolling else 0
+    frame = frame.loc[frame.timestamp < upper].copy()
     if rolling:
         frame.rename(columns={"strike": "actual_strike"}, inplace=True)
     frame["series"] = entry["series"]
+    frame.attrs["window_validation"] = dict(
+        bounds, included_rows=len(frame), excluded_end_date_rows=excluded,
+        policy="ROLLING_END_DATE_EXCLUDED" if rolling else "INDEX_STRICT_WINDOW",
+        provider_end_date_inclusion_observed=bool(excluded),
+    )
     return frame
 
 
@@ -226,7 +263,9 @@ def save_chunk(root, entry, raw, frame):
                  raw_sha256=file_hash(raw_path),
                  parquet_sha256=file_hash(parquet_path) if not frame.empty else None,
                  fetched_at_ist=datetime.now(IST).isoformat(),
-                 independently_verified=False, daily=daily_facts(frame))
+                 independently_verified=False,
+                 window_validation=frame.attrs.get("window_validation", {}),
+                 daily=daily_facts(frame))
     atomic_json(base.with_suffix(".manifest.json"), value)
     return value
 
@@ -260,6 +299,9 @@ def write_report(root, entries, completed, errors):
                    planned_chunks=len(entries), completed_chunks=len(completed),
                    empty_chunks=sum(item["status"] == "EMPTY" for item in completed),
                    rows=sum(item["rows"] for item in completed), errors=errors,
+                   excluded_end_date_rows=sum(item.get("window_validation", {}).get("excluded_end_date_rows", 0)
+                                              for item in completed),
+                   window_boundary_policy="INDEX_STRICT_ROLLING_END_DATE_EXCLUSION",
                    collection_status="FINISHED_WITH_EMPTY_WINDOWS" if len(completed)==len(entries) and any(item["status"]=="EMPTY" for item in completed)
                    else "FINISHED" if len(completed)==len(entries) else "PARTIAL",
                    complete_five_year_market_coverage_confirmed=False,
@@ -310,6 +352,8 @@ def failure_details(entry, stage, exc):
         item["reason"] = "CANDLE_VALIDATION_FAILED"
         rule = str(exc)
         item["validation_rule"] = rule if rule in VALIDATION_RULES else "UNCLASSIFIED_VALIDATION"
+        if isinstance(exc, CandleWindowError):
+            item["window_diagnostics"] = exc.details
     elif stage == "CACHE":
         item["reason"] = "CACHE_INTEGRITY_FAILED"
     return item
@@ -364,7 +408,9 @@ def collect(entries, root, *, client=None, pause_seconds=1, max_requests=None, r
             frame = parse_bars(raw, entry)
             stage = "CHUNK_STORAGE"
             completed.append(save_chunk(root, entry, raw, frame))
-            print(f'SAVED {entry["series"]}: {entry["start"]} to {entry["end"]}, {len(frame)} rows', file=sys.stderr)
+            excluded = frame.attrs.get("window_validation", {}).get("excluded_end_date_rows", 0)
+            suffix = f", excluded_end_date_rows={excluded}" if excluded else ""
+            print(f'SAVED {entry["series"]}: {entry["start"]} to {entry["end"]}, {len(frame)} rows{suffix}', file=sys.stderr)
             stage = "REPORT_STORAGE"
             write_report(root, entries, completed, errors)
         except (RuntimeError, ValueError, OSError) as exc:

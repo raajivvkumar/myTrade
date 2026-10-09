@@ -1,6 +1,7 @@
 """Offline five-year plan, integrity, coverage and research-claim checks."""
 from datetime import date, datetime
 import json
+import gzip
 
 import pandas as pd
 import pytest
@@ -329,3 +330,89 @@ def test_expiry_correction_reuses_index_but_does_not_rename_zero_option_cache(mo
     assert report["completed_chunks"] == 3
     assert history.file_hash(legacy_path) == legacy_hash
     assert all(item["series"] != "WEEK_0_ATM_CALL" for item in report["yearly"])
+
+
+def rolling_response_at(times):
+    n = len(times)
+    source = dict(
+        timestamp=[int(pd.Timestamp(t, tz="Asia/Kolkata").timestamp()) for t in times],
+        open=[100+i for i in range(n)], high=[102+i for i in range(n)],
+        low=[99+i for i in range(n)], close=[101+i for i in range(n)],
+        volume=[20]*n, strike=[22500]*n, iv=[20]*n, oi=[1000]*n, spot=[22510]*n,
+    )
+    return {"data": {"ce": source, "pe": None}}
+
+
+def reported_window_entries():
+    return history.make_plan(date(2026, 8, 11), date(2026, 10, 9), ["ATM"], "WEEK", 1)
+
+
+def test_rolling_end_date_bars_excluded_and_retained_in_original_response(tmp_path):
+    entry = reported_window_entries()[4]  # older CALL window: Aug 11 to Sep 10
+    raw = rolling_response_at(["2026-09-09 15:29", "2026-09-10 09:15", "2026-09-10 09:16"])
+    frame = history.parse_bars(raw, entry)
+    assert frame.timestamp.tolist() == [pd.Timestamp("2026-09-09 15:29")]
+    assert frame.attrs["window_validation"]["excluded_end_date_rows"] == 2
+    assert frame.attrs["window_validation"]["returned_rows"] == 3
+    manifest = history.save_chunk(tmp_path, entry, raw, frame)
+    assert manifest["rows"] == 1
+    assert manifest["window_validation"]["excluded_end_date_rows"] == 2
+    raw_path = history.chunk_base(tmp_path, entry).with_suffix(".raw.json.gz")
+    with gzip.open(raw_path, "rt", encoding="utf-8") as source:
+        assert json.load(source) == raw
+
+
+@pytest.mark.parametrize("outside", ["2026-08-10 15:29", "2026-09-11 09:15"])
+def test_unexpected_dates_still_fail_with_precise_safe_bounds(outside):
+    entry = reported_window_entries()[4]
+    times = sorted(["2026-08-11 09:15", outside])
+    raw = rolling_response_at(times)
+    with pytest.raises(history.CandleWindowError) as raised:
+        history.parse_bars(raw, entry)
+    details = raised.value.details
+    assert details["before_start_rows"] + details["after_end_date_rows"] == 1
+    assert details["returned_rows"] == 2
+    assert details["requested_end_exclusive_ist"] == "2026-09-10T00:00:00+05:30"
+
+
+def test_index_window_does_not_get_rolling_end_date_tolerance():
+    entry = reported_window_entries()[3]
+    raw = rolling_response_at(["2026-09-09 15:29", "2026-09-10 09:15"])["data"]["ce"]
+    with pytest.raises(history.CandleWindowError):
+        history.parse_bars(raw, entry)
+
+
+def test_adjacent_rolling_windows_do_not_duplicate_end_date():
+    entries = reported_window_entries()
+    old = history.parse_bars(rolling_response_at(["2026-09-09 15:29", "2026-09-10 09:15"]), entries[4])
+    new = history.parse_bars(rolling_response_at(["2026-09-10 09:15", "2026-10-09 15:29"]), entries[1])
+    assert not pd.concat([old, new]).timestamp.duplicated().any()
+
+
+def test_only_boundary_day_response_is_empty_with_visible_exclusion_count(monkeypatch, tmp_path):
+    monkeypatch.setattr(history.time, "sleep", lambda _: None)
+    entry = reported_window_entries()[4]
+    raw = rolling_response_at(["2026-09-10 09:15"])
+    class BoundaryOnly(Client):
+        def _call(self, *args):
+            return raw
+    report = history.collect([entry], tmp_path, client=BoundaryOnly())
+    assert report["rows"] == 0
+    assert report["empty_chunks"] == 1
+    assert report["excluded_end_date_rows"] == 1
+    assert report["collection_status"] == "FINISHED_WITH_EMPTY_WINDOWS"
+    assert history.load_cached(tmp_path, entry)["window_validation"]["included_rows"] == 0
+
+
+def test_window_error_report_contains_timestamps_without_broker_free_text(monkeypatch, tmp_path):
+    monkeypatch.setattr(history.time, "sleep", lambda _: None)
+    entry = reported_window_entries()[4]
+    class Outside(Client):
+        def _call(self, *args):
+            return rolling_response_at(["2026-08-10 15:29", "2026-08-11 09:15"])
+    with pytest.raises(history.BackfillError) as raised:
+        history.collect([entry], tmp_path, client=Outside())
+    bounds = raised.value.details["window_diagnostics"]
+    assert bounds["first_returned_timestamp_ist"] == "2026-08-10T15:29:00+05:30"
+    assert bounds["last_returned_timestamp_ist"] == "2026-08-11T09:15:00+05:30"
+    assert json.loads((tmp_path / "last_failure.json").read_text())["error"]["window_diagnostics"] == bounds
