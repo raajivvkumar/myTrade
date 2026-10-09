@@ -238,6 +238,28 @@ def archive_quarter(q, *, client, staging, remote, intervals=INTERVALS,
         return {"quarter": q.key, "status": outcome, "resumed_completed_zip": True}
     complete = _load_completed(part_path)
     planned = list(_each_query(q, intervals))
+    # Recovery case: process stopped after the final manifest was flushed,
+    # before .partial could be renamed and uploaded. Never create a second
+    # duplicate manifest or redo successful broker requests.
+    if part_path.exists():
+        with zipfile.ZipFile(part_path, "r") as existing:
+            if "manifest.json" in existing.namelist():
+                manifest = json.loads(existing.read("manifest.json"))
+                if (len(complete) != len(planned)
+                        or manifest["requests_planned"] != len(planned)
+                        or manifest["quarter"] != q.key):
+                    raise RuntimeError("Completed staging ZIP does not match quarter plan")
+                part_path.replace(final_path)
+                uploaded = upload_fn(final_path, remote)
+                final_path.unlink()
+                return {
+                    "quarter": q.key, "status": uploaded,
+                    "requests": len(planned), "new_calls": 0,
+                    "empty_responses": manifest["empty_responses"],
+                    "rows": manifest["rows_exported"],
+                    "coverage_status": manifest["coverage_status"],
+                    "resumed_completed_zip": True,
+                }
     performed = 0
     with zipfile.ZipFile(part_path, "a", compression=zipfile.ZIP_DEFLATED,
                          compresslevel=6, allowZip64=True) as archive:
@@ -393,6 +415,7 @@ def run(args, *, client=None, sleeper=time.sleep,
         len(selected) == len(quarters)
         and all(x["status"] in ("UPLOADED_MD5_VERIFIED",
                                 "ALREADY_PRESENT_MD5_VERIFIED")
+                and x.get("coverage_status") != "PARTIAL_EMPTY_RESPONSES"
                 for x in output["archived_quarters"])
         and not output["excluded_old_quarters"])
     return output
