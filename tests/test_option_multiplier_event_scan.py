@@ -204,3 +204,30 @@ def test_validate_vedic_transit_requires_vedic_astrology():
     args.vedic_transits = True
     with pytest.raises(ValueError, match="requires"):
         run(args)
+
+
+def test_first_5m_premium_sign_is_before_crossing_not_at_crossing():
+    data = bars(n=100)
+    for idx, price in ((30, 11), (31, 13), (32, 15),
+                       (33, 17), (34, 19), (35, 20)):
+        data.loc[idx, ["close", "high"]] = price
+    found = summarize_scans([scan(data, horizon=60)])
+    example = found["examples"]["2x"]["records"][0]
+    assert example["first_momentum20_sign_before_crossing_ist"] == (
+        "2026-10-06T09:46+05:30")
+    assert example["first_observed_crossing_close_ist"] == (
+        "2026-10-06T09:50+05:30")
+    assert example["minutes_from_momentum_sign_to_crossing"] == 4
+    assert example["first_prior_momentum20_sign_ist"] is None
+
+
+def test_stable_crossing_before_segment_split_still_counts():
+    data = bars(n=80)
+    data.loc[20, ["close", "high"]] = 25
+    data.loc[25:, "actual_strike"] = 22450
+    data.loc[25:, ["open", "close", "high"]] = 25
+    found = summarize_scans([scan(data, horizon=60)])
+    assert found["thresholds"]["2x"]["positive_anchor_windows_overlapping"] > 0
+    assert found["thresholds"]["2x"][
+        "observed_episode_count_not_deduped_across_aliases"] >= 1
+    assert found["strike_switches"] == 1
