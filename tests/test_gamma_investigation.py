@@ -151,6 +151,8 @@ def test_exact_contract_5x_is_observed_close_not_trade_profit():
     entry = outcomes.loc[outcomes.signal_ist.eq("2026-10-08 10:45:00")]
     assert len(entry) == 1
     row = entry.iloc[0]
+    assert row.observed_ge_2x
+    assert row.observed_ge_3x
     assert row.observed_ge_5x
     assert not row.observed_ge_10x
     assert row.entry_next_open == 4.0
@@ -158,13 +160,30 @@ def test_exact_contract_5x_is_observed_close_not_trade_profit():
     assert "NOT_EXECUTABLE_PNL" in row.result_type
     report = compare_fingerprint_cohorts(outcomes)
     assert report["gamma_history_present"] is False
-    assert report["observed_5x"] >= 1
+    assert report["observed_2x"] >= report["observed_3x"] >= report["observed_5x"] >= 1
+
+
+def test_2x_close_multiple_is_observed_without_reaching_3x():
+    data = synthetic_contract()
+    data.loc[100, "close"] = 10.0
+    data.loc[100, "high"] = 11.0
+    outcomes = exact_contract_observations(data, horizon=30)
+    actual_2x_only = outcomes.loc[outcomes.observed_ge_2x & ~outcomes.observed_ge_3x]
+    assert len(actual_2x_only) > 0
+    assert actual_2x_only.observed_close_multiple.eq(2.5).all()
+    summary = compare_fingerprint_cohorts(outcomes)
+    assert summary["observed_2x"] > 0
+    assert summary["observed_3x"] == 0
+    assert summary["observed_5x"] == 0
+    assert summary["observed_10x"] == 0
+    assert summary["flagged_2x_rate"] is not None or summary["unflagged_2x_rate"] is not None
 
 
 def test_bogus_intraminute_high_never_becomes_5x_outcome():
     data = synthetic_contract()
     data.loc[100, "high"] = 200.0
     out = exact_contract_observations(data, horizon=30)
+    assert not out.observed_ge_2x.any()
     assert not out.observed_ge_5x.any()
 
 
@@ -187,7 +206,9 @@ def test_missing_future_minutes_do_not_create_multiple():
 
 
 def test_only_index_data_cannot_claim_gamma_proof():
-    assert compare_fingerprint_cohorts(pd.DataFrame())["status"] == "INSUFFICIENT_CONTIGUOUS_DATA"
+    summary = compare_fingerprint_cohorts(pd.DataFrame())
+    assert summary["status"] == "INSUFFICIENT_CONTIGUOUS_DATA"
+    assert summary["observed_2x"] == 0
 
 
 def test_streamlit_page_is_valid_python_and_has_no_archive_calls():
