@@ -21,6 +21,8 @@ from app.broker.dhan_history import backward_windows, five_year_start, parse_bar
 
 LEVELS = (2, 3, 5, 10)
 RULES = ("momentum20", "volume2_momentum20", "volume2_oi10")
+FEATURES = ("premium_5m_pct", "volume_5m_vs_prior30", "oi_5m_pct",
+            "iv_change_5m", "spot_move_5m_pct", "strike_to_spot_pct")
 
 
 def queries(start, through, full=False):
@@ -40,6 +42,10 @@ def queries(start, through, full=False):
 def empty_day():
     return {"decisions": 0, "excluded_past": 0, "censored_future": 0,
             "labeled": 0, "switches": 0,
+            "feature_cohorts": {
+                str(level): {feature: {key: 0 for key in (
+                    "event_n", "other_n", "event_sum", "other_sum")}
+                    for feature in FEATURES} for level in LEVELS},
             "positives": {str(x): 0 for x in LEVELS},
             "rules": {name: {"missing": 0,
                               "scores": {str(x): {k: 0 for k in ("tp", "fp", "fn", "tn")}
@@ -95,6 +101,20 @@ def study_chunk(frame, horizon=30, min_price=2.0):
             oi_pct = (100 * (oi.iloc[-1] / oi.iloc[-6] - 1)
                       if len(oi) == 35 and pd.notna(oi.iloc[-1])
                       and pd.notna(oi.iloc[-6]) and oi.iloc[-6] > 0 else np.nan)
+            iv = pd.to_numeric(pre.iv, errors="coerce") if "iv" in pre else pd.Series(dtype=float)
+            spot = pd.to_numeric(pre.spot, errors="coerce") if "spot" in pre else pd.Series(dtype=float)
+            iv_delta = (float(iv.iloc[-1] - iv.iloc[-6])
+                        if len(iv) == 35 and pd.notna(iv.iloc[-1])
+                        and pd.notna(iv.iloc[-6]) else np.nan)
+            spot_move = (100 * (float(spot.iloc[-1]) / float(spot.iloc[-6]) - 1)
+                         if len(spot) == 35 and pd.notna(spot.iloc[-1])
+                         and pd.notna(spot.iloc[-6]) and spot.iloc[-6] > 0 else np.nan)
+            moneyness = (100 * (float(pre.actual_strike.iloc[-1]) / float(spot.iloc[-1]) - 1)
+                         if len(spot) == 35 and pd.notna(spot.iloc[-1])
+                         and spot.iloc[-1] > 0 else np.nan)
+            descriptive = dict(zip(FEATURES, (
+                momentum, volratio, oi_pct, iv_delta, spot_move, moneyness,
+            )))
             flags = {
                 "momentum20": pd.notna(momentum) and momentum >= 20,
                 "volume2_momentum20": pd.notna(volratio) and pd.notna(momentum)
@@ -123,6 +143,12 @@ def study_chunk(frame, horizon=30, min_price=2.0):
             for threshold in LEVELS:
                 truth = ratio >= threshold
                 state["positives"][str(threshold)] += int(truth)
+                for feature, value in descriptive.items():
+                    if pd.notna(value) and math.isfinite(float(value)):
+                        slot = state["feature_cohorts"][str(threshold)][feature]
+                        label = "event" if truth else "other"
+                        slot[label + "_n"] += 1
+                        slot[label + "_sum"] += float(value)
                 for name in RULES:
                     state["rules"][name]["missing"] += int(missing[name]) if threshold == 2 else 0
                     alert = bool(flags[name])
@@ -140,6 +166,11 @@ def merge_day(dst, dates):
             current[metric] += value[metric]
         for level in LEVELS:
             current["positives"][str(level)] += value["positives"][str(level)]
+        for level in LEVELS:
+            for feature in FEATURES:
+                for metric in ("event_n", "other_n", "event_sum", "other_sum"):
+                    current["feature_cohorts"][str(level)][feature][metric] += (
+                        value["feature_cohorts"][str(level)][feature][metric])
         for rule in RULES:
             current["rules"][rule]["missing"] += value["rules"][rule]["missing"]
             for level in LEVELS:
@@ -154,7 +185,20 @@ def _divide(a, b):
 
 def _cohort(dates, names):
     result = {"dates": len(names), "labeled": sum(dates[d]["labeled"] for d in names),
-              "rules": {}}
+              "feature_means": {}, "rules": {}}
+    for level in LEVELS:
+        bucket = {}
+        for feature in FEATURES:
+            sums = {key: sum(dates[d]["feature_cohorts"][str(level)][feature][key]
+                             for d in names)
+                    for key in ("event_n", "other_n", "event_sum", "other_sum")}
+            bucket[feature] = {
+                "events_available": sums["event_n"],
+                "non_events_available": sums["other_n"],
+                "event_mean": _divide(sums["event_sum"], sums["event_n"]),
+                "non_event_mean": _divide(sums["other_sum"], sums["other_n"]),
+            }
+        result["feature_means"][f"{level}x"] = bucket
     for rule in RULES:
         entry = {"missing_features": sum(dates[d]["rules"][rule]["missing"] for d in names),
                  "thresholds": {}}
@@ -184,6 +228,9 @@ def aggregate(dates):
                   str(level): sum(d["positives"][str(level)] for d in dates.values())
                   for level in LEVELS},
               "chronological_session_holdout": None}
+    result["descriptive_5m_precursor_comparison"] = (
+        _cohort(dates, eligible)["feature_means"] if eligible else {}
+    )
     if len(eligible) >= 10:
         split = max(2, math.ceil(len(eligible) * .25))
         result["chronological_session_holdout"] = {
