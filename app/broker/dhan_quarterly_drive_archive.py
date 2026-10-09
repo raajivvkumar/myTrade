@@ -150,7 +150,7 @@ def upload_verified(local_zip, remote, *, existing=None):
                 "Refusing to overwrite a different Google Drive quarterly archive")
         return "ALREADY_PRESENT_MD5_VERIFIED"
     _rclone(["copyto", str(local_zip), remote + final_name,
-             "--checksum", "--retries", "3"], capture=True)
+             "--checksum", "--immutable", "--retries", "3"], capture=True)
     if _remote_md5(remote, final_name) != source_md5:
         raise RuntimeError("Google Drive MD5 verification failed; local ZIP retained")
     return "UPLOADED_MD5_VERIFIED"
