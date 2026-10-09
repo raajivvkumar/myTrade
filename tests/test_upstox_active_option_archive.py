@@ -116,7 +116,7 @@ def test_invalid_contract_does_not_trigger_historical_fetch():
     with pytest.raises(ValueError, match="unique"):
         b.current_contract(expiry="current_month", strike=25100, side="PE")
     assert len(s.calls) == 1
-    with pytest.raises(ValueError, match="Expired"):
+    with pytest.raises(ValueError, match="expired-contract"):
         b.current_contract(expiry="2026-01-01", strike=25000, side="PE")
     assert len(s.calls) == 1
 
