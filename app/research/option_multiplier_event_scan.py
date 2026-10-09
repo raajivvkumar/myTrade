@@ -114,7 +114,9 @@ def _features(bars, index):
 
 
 def _first_prior_signal(bars, index, rule, lookback=15):
-    for i in range(max(15, index - lookback), index + 1):
+    # The entry OPEN is not known concurrently with the entry bar CLOSE.
+    # Only consider signals ending before the entry minute.
+    for i in range(max(15, index - lookback), index):
         record = _features(bars, i)
         if record is not None and record["signals"][rule] is True:
             return _minute(bars["timestamp"][i])
@@ -176,7 +178,9 @@ def scan_rolling_frame(frame, *, series, side, horizon=60, min_price=2.0,
                     stats["entry_below_min_price"] += 1
                     continue
                 stats["possible_decision_entries"] += 1
-                features = _features(values, i)
+                # Entry is the OPEN of minute i: last completed inputs are
+                # at minute i-1, never at the entry-minute CLOSE.
+                features = _features(values, i - 1)
                 if features is None:
                     stats["past_history_unavailable"] += 1
                 end = min(n, i + horizon + 1)
