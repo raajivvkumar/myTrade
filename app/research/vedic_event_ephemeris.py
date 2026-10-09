@@ -72,7 +72,10 @@ def _positions_at_ist(iso_minute):
     }
     planets = {}
     for name, body in bodies.items():
-        xx, retflags = swe.calc_ut(jd, body, flags)
+        calculated = swe.calc_ut(jd, body, flags)
+        # pysweph >= 2.10.3.3 returns (coordinates, flags, warning).
+        # Legacy pyswisseph returns (coordinates, flags).
+        xx, retflags = calculated[0], calculated[1]
         if not (retflags & swe.FLG_SIDEREAL):
             raise RuntimeError("Swiss Ephemeris did not return sidereal coordinates")
         planets[name] = _position(xx[0], xx[3])
