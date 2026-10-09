@@ -83,13 +83,37 @@ data or trading orders are written to local files, GitHub, Google
 Drive or any broker order endpoint. Synthetic pytest fixtures do
 temporarily use pytest's separate scratch folder, which is cleaned.
 
-Default `--max-requests` is intentionally 6. `--full` expands the
-potential request universe but never overrides the explicit request
-cap. The first six requests cover just the **newest 30-day request
-window** with the six near-expiry ATM ±1 CALL/PUT selections. They do
-**not** represent every strike, expiry and date back to September 1.
-A broader backtest must be budgeted for provider rate limits and
-entitlement; increase the cap explicitly.
+**Five-year default:** when no dates are specified, the command uses
+the most recent five calendar years in Asia/Kolkata time. On
+2026-10-09 that is `2021-10-09` through `2026-10-09` inclusive.
+`--full` adds all available documented ATM offsets and expiry buckets.
+This generates **61 non-overlapping 30-day-or-shorter request blocks,
+140 rolling option requests per block, 8,540 total**. Without
+`--full`, only weekly near-expiry ATM CALL/PUT pairs are selected.
+
+`--max-requests` now defaults to **unlimited (None)**: a complete
+`--full --execute` run can contact Dhan thousands of times.
+Always run a no-`--execute` preview first, check subscription
+and available token validity, and intentionally specify a cap for pilots.
+An explicit cap such as `--max-requests 6` STILL analyzes only the
+newest few series, **not the last five years**. Request coverage and
+the next zero-based request index are shown in the report; exhausted
+requests with empty responses do not count as full historical coverage.
+
+`--start-request N` can study a later slice without re-requesting
+earlier slices; it is **deliberately marked PARTIAL**. Separate RAM-only
+runs cannot be merged by the app, because the user requested that no
+market/history datasets or accumulated results be persisted. A complete
+five-year combined summary therefore requires an uninterrupted full
+pass or an explicit later decision to allow aggregate-only checkpoints.
+Dhan's 24-hour access-token lifetime and provider throttling may limit
+long runs.
+
+The five-year scanner uses `StreamingRollingSummary` and
+`StreamingTransitSummary`, updating counters per broker response.
+It retains a bounded number of event examples in memory (not all
+raw candles), and does not save data to local files, Drive, or Git.
+
 
 The `--vedic-astrology` and `--vedic-transits` options require the
 optional `pysweph` package (`requirements-astro.txt`), which was
@@ -128,3 +152,47 @@ It requires an active Dhan data plan, checks the request period and
 response schema, throttles calls by at least 0.25 seconds, stops on
 an unexpected response, and emits controlled diagnostics without
 revealing tokens or raw vendor responses. Read-only endpoints only.
+
+## Five-year historical study: explicit commands
+
+```bash
+cd /d/RaajivvProject/myTrade
+git fetch origin
+git switch feature/dhan-gamma-discovery-v3
+git pull --ff-only
+source .venv-dhan/Scripts/activate
+bash scripts/run_tests_gitbash.sh
+
+# Complete five-year request PLAN only (no token, no Dhan traffic):
+python -m app.research.dhan_event_discovery_v3 \
+  --from-date 2021-10-09 --through 2026-10-09 --full
+
+# First complete 30-day block (140 rolling series), if authorized.
+# This is still a partial first-stage scan, explicitly tagged as such.
+python -m app.research.dhan_event_discovery_v3 \
+  --from-date 2021-10-09 --through 2026-10-09 \
+  --full --max-requests 140 \
+  --horizon 60 --vedic-astrology --vedic-transits \
+  --execute --progress
+
+# Full five-year all-option-offset scan with no hard request cap.
+# This uses your local authorized Data API; output is terminal-only.
+python -m app.research.dhan_event_discovery_v3 \
+  --from-date 2021-10-09 --through 2026-10-09 \
+  --full --horizon 60 --vedic-astrology --vedic-transits \
+  --execute --progress
+```
+
+Use a valid DhanHQ Data API subscription and local 24-hour access
+token. Never share tokens, passwords or TOTP codes in the chat.
+Dhan documents five years of rolling 1m options data, a maximum
+30 calendar days per expired-options request, and relative
+ATM/ATM±offset rather than authenticated fixed-contract histories.
+Each successful call still needs provider-side data availability
+and per-instrument quality validation.
+
+**Research gate:** full coverage and no empty responses are necessary
+but NOT sufficient to claim real Gamma multipliers. Independent
+historical expiry/security IDs, Greeks and executable bid/ask are
+unavailable in this rolling endpoint. Do not report prediction accuracy
+or prove astrological causality using this API alone.
