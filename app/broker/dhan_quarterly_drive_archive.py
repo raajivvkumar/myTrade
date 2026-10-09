@@ -96,7 +96,11 @@ def plan_quarters(start, through, *, today):
 def _rclone(cmd, *, capture=True):
     if shutil.which("rclone") is None:
         raise RuntimeError("rclone is not installed or not on PATH")
-    completed = subprocess.run(["rclone", *cmd], check=False,
+    # Safety: pin every destination operation to our verified Drive folder
+    # regardless of the remote's configured root. Never write elsewhere.
+    argv = (["rclone", *cmd] if cmd[0] == "listremotes" else
+            ["rclone", *cmd, "--drive-root-folder-id", DRIVE_FOLDER_ID])
+    completed = subprocess.run(argv, check=False,
                                capture_output=capture, text=True, timeout=1800)
     if completed.returncode:
         # Avoid printing OAuth tokens, provider raw response text or CLI config.
@@ -112,8 +116,8 @@ def _verify_remote(remote):
     names = set(_rclone(["listremotes"]).splitlines())
     if remote not in names:
         raise RuntimeError("Configured rclone remote was not found; run rclone config")
-    # The remote must be rooted to DRIVE_FOLDER_ID by the user's local rclone
-    # configuration. We cannot read or export its OAuth credentials here.
+    # _rclone pins root folder on each Drive command; its local OAuth
+    # credentials are never printed, copied or exported.
     _rclone(["lsf", remote, "--files-only", "--max-depth", "1"])
 
 
@@ -405,7 +409,7 @@ def main():
     parser.add_argument("--quarter-limit", type=int, default=None,
                         help="Start with one quarter before bulk historical backfill")
     parser.add_argument("--remote", default="dhanarchive:",
-                        help="rclone Drive remote ROOTED to this archive folder ID")
+                        help="Authenticated rclone Google Drive remote; root pinned automatically")
     parser.add_argument("--staging", default=str(
         Path.cwd().parent / "myTrade_Dhan_archive_staging"))
     parser.add_argument("--pause", type=float, default=.35)
