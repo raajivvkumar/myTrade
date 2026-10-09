@@ -131,7 +131,7 @@ def compare_chain_snapshots(earlier: pd.DataFrame, later: pd.DataFrame) -> pd.Da
 def exact_contract_observations(option: pd.DataFrame, *,
                                 horizon: int = 30,
                                 min_premium: float = 2.0) -> pd.DataFrame:
-    """Retrospective 3x/5x/10x labels from one fixed option contract.
+    """Retrospective 2x/3x/5x/10x labels from one fixed option contract.
 
     Fingerprints at minute t use t and past ONLY. Outcome uses next minute OPEN
     and maximal NEXT-horizon minute CLOSE. Never treat outcome as a fill.
@@ -225,6 +225,7 @@ def exact_contract_observations(option: pd.DataFrame, *,
                 "entry_next_open": price,
                 "max_forward_minute_close": best,
                 "observed_close_multiple": round(multiple, 4),
+                "observed_ge_2x": bool(multiple >= 2),
                 "observed_ge_3x": bool(multiple >= 3),
                 "observed_ge_5x": bool(multiple >= 5),
                 "observed_ge_10x": bool(multiple >= 10),
@@ -252,7 +253,8 @@ def compare_fingerprint_cohorts(observations: pd.DataFrame) -> dict:
         return {
             "eligible_windows": 0,
             "volume_2x_windows": 0,
-            "observed_3x": 0, "observed_5x": 0, "observed_10x": 0,
+            "observed_2x": 0, "observed_3x": 0,
+            "observed_5x": 0, "observed_10x": 0,
             "status": "INSUFFICIENT_CONTIGUOUS_DATA",
         }
     selected = observations.loc[observations.watch_volume_2x]
@@ -267,7 +269,7 @@ def compare_fingerprint_cohorts(observations: pd.DataFrame) -> dict:
             "represent a realizable fill or Gamma causal attribution."
         ),
     }
-    for mul in (3, 5, 10):
+    for mul in (2, 3, 5, 10):
         column = f"observed_ge_{mul}x"
         answer[f"observed_{mul}x"] = int(observations[column].sum())
         answer[f"flagged_{mul}x_rate"] = (
