@@ -7,13 +7,24 @@ import time
 from datetime import date
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from app.broker.dhan_historical import DhanClient, RollingQuery, windows
+from app.broker.dhan_probe import run_nifty_probe
+
+
+def load_local_credentials():
+    """Load only this checkout's .env; process environment takes precedence."""
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 
 def parser():
     p = argparse.ArgumentParser(description="MyTrade NIFTY read-only DhanHQ Data API")
     commands = p.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="Verify token and Data API status without showing credentials")
+    n = commands.add_parser("nifty", help="Preview / test 09:15-09:30 IST NIFTY 1-minute candles")
+    n.add_argument("--date", type=date.fromisoformat, required=True)
+    n.add_argument("--execute", action="store_true", help="Enable profile and one historical data request")
     r = commands.add_parser("rolling", help="Preview / collect 1-minute rolling expired-option data")
     r.add_argument("--from-date", type=date.fromisoformat, required=True)
     r.add_argument("--to-date", type=date.fromisoformat, required=True, help="Exclusive end date")
@@ -49,6 +60,7 @@ def run_rolling(args):
     if not args.execute:
         return
 
+    load_local_credentials()
     client = DhanClient()
     if str(client.profile().get("dataPlan", "")).lower() != "active":
         raise RuntimeError("Dhan Data API plan not active; no historical calls made")
@@ -83,13 +95,21 @@ def run_rolling(args):
 
 def main():
     args = parser().parse_args()
-    if args.command == "status":
-        plan = DhanClient().profile()
-        print("Data API plan: " + str(plan.get("dataPlan") or "Unknown"))
-        print("Data validity: " + str(plan.get("dataValidity") or "Unknown"))
-        print("Token validity: " + str(plan.get("tokenValidity") or "Unknown"))
-    else:
-        run_rolling(args)
+    try:
+        if args.command == "status":
+            load_local_credentials()
+            plan = DhanClient().profile()
+            print("Data API plan: " + str(plan.get("dataPlan") or "Unknown"))
+            print("Data validity: " + str(plan.get("dataValidity") or "Unknown"))
+            print("Token validity: " + str(plan.get("tokenValidity") or "Unknown"))
+        elif args.command == "nifty":
+            if args.execute:
+                load_local_credentials()
+            print(json.dumps(run_nifty_probe(args.date, execute=args.execute), indent=2))
+        else:
+            run_rolling(args)
+    except (RuntimeError, ValueError) as exc:
+        raise SystemExit(str(exc)) from None
 
 
 if __name__ == "__main__":

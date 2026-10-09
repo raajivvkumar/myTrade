@@ -8,7 +8,44 @@ From the project root, install:
 
     python -m pip install -r requirements.txt
 
-Copy .env.example to .env. Only after subscribing, generate a fresh token in Dhan Web > My Profile > Access DhanHQ APIs. Fill DHAN_ACCESS_TOKEN in the local .env. Never commit or paste the token; manually generated tokens are usually valid for 24 hours.
+Use GitHub branch `feature/dhanhq-readonly-data-prep` (draft PR #3) as the code source. Do not merge it into main merely to try the connection. Your local checkout is only the execution environment; real broker credentials stay outside Git.
+
+Copy .env.example to .env only if .env does not already exist. Generate a fresh token in Dhan Web > My Profile > Access DhanHQ APIs. Set DHAN_ACCESS_TOKEN in this checkout's local .env. The CLI now loads this exact .env for status and explicit execution, without overriding exported environment variables. Never commit or paste the token; manually generated tokens are valid for 24 hours. The profile check works before buying a Data API subscription and reports its status; candle requests require an active Data API plan.
+
+Existing Windows Git Bash checkout:
+
+```bash
+cd /d/RaajivvProject/myTrade
+git status --short
+git fetch origin
+git switch feature/dhanhq-readonly-data-prep
+git pull --ff-only
+source .venv/Scripts/activate
+python -m pip install -r requirements.txt
+```
+
+If Git reports conflicting local changes, retain them and stop the switch rather than resetting or deleting them. If the existing virtual environment references a missing Python installation, install Python 3.12+ and create a separate environment with `python -m venv .venv-dhan`, then activate `.venv-dhan/Scripts/activate`.
+
+## Small NIFTY 1-minute probe
+
+Preview the request without credentials, network access, or data writes:
+
+```bash
+python -m app.broker.dhan_cli nifty --date 2026-10-08
+```
+
+After setting your fresh token locally:
+
+```bash
+python -m app.broker.dhan_cli status
+python -m app.broker.dhan_cli nifty --date 2026-10-08 --execute
+```
+
+The probe makes one GET /v2/profile and, only with an active data plan, one POST /v2/charts/intraday for NIFTY 50 index (13 / IDX_I / INDEX), 09:15 inclusive to 09:30 exclusive IST on the chosen date. It validates OHLC, finite values, minute timestamps, duplicate/order errors and window bounds. The JSON summary reports actual candle count and every missing minute; partial coverage is INCOMPLETE, never filled with synthetic bars. It keeps candles in memory only, displays at most three sample candles, and creates no history archive. Choose a past trading date; an empty holiday response is an error. A complete sample tests access and basic structure, not independent market accuracy or option contract identity.
+
+Share only the sanitized summary or error, never your token or .env. There are no order endpoints or scheduled requests. Static IP is required by Dhan for order placement, not this data-only workflow. Redirects are disabled so credentials are not forwarded to another host.
+
+Live connection status for this implementation: no Dhan token was available in the agent session or the inspected local .env; no broker request was made. Automated tests use synthetic/mocked responses. Activate/confirm Data APIs yourself through Dhan; this code does not purchase a plan or rotate your account credentials.
 
 ## Preview (no credentials needed)
 
@@ -40,6 +77,8 @@ Official sources:
 https://dhanhq.co/docs/v2/expired-options-data/
 https://dhanhq.co/docs/v2/authentication/
 https://dhanhq.co/docs/v2/annexure/
+https://dhanhq.co/docs/v2/historical-data/
+https://github.com/dhan-oss/DhanHQ-py
 
 ## Security
 

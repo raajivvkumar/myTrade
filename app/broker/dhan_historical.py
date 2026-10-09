@@ -106,13 +106,15 @@ class DhanClient:
         self.session = session if session is not None else requests.Session()
 
     def _call(self, method, path, payload=None):
-        if (method, path) not in (("GET", "/profile"), ("POST", "/charts/rollingoption")):
+        if (method, path) not in (("GET", "/profile"), ("POST", "/charts/rollingoption"),
+                                  ("POST", "/charts/intraday")):
             raise ValueError("Only allowlisted read-only Data API operations are permitted")
         headers = {"accept": "application/json", "access-token": self.token}
         if payload is not None:
             headers["content-type"] = "application/json"
         try:
-            resp = self.session.request(method, URL + path, headers=headers, json=payload, timeout=30)
+            resp = self.session.request(method, URL + path, headers=headers, json=payload,
+                                        timeout=30, allow_redirects=False)
         except requests.RequestException as exc:
             raise RuntimeError("DhanHQ network/timeout error") from exc
         if resp.status_code != 200:
