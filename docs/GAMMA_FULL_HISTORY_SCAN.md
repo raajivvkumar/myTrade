@@ -106,3 +106,52 @@ complete out-of-sample walk-forward evaluation across held-out expiries,
 and model actual bid/ask spreads, fill assumptions, charges and slippage.
 Prefer comparing at least a diverse set of expiry dates and both positive
 and negative contracts, not overlapping windows alone.
+
+## Frozen fingerprint versus future-expiry holdout (new)
+
+The scanner now includes a \`fingerprint_holdout\` object. This is intentionally
+separate from retrospective \`observed_2x_events\` and matched case/control
+summaries. It seeks potential *false positives* as well as successful cases.
+
+The preregistered, **NOT optimized** candidate screens are:
+
+- \`VOLUME_GE_2_AND_PREMIUM_MOMENTUM_GE_20PCT\`: preceding 5-minute
+  volume mean >=2× the previous 30-minute mean AND the previous 5-minute
+  option premium return >=20%.
+- \`VOLUME_GE_2_AND_OI_RISE_GE_10PCT\`: the same volume condition AND
+  genuinely observed 5-minute OI increase >=10%.
+- \`PREMIUM_MOMENTUM_GE_20PCT\`: trailing 5-minute option premium return >=20%.
+
+These are candidates to FALSIFY, not established fingerprints. If a required
+feature is missing, the rule does not alert and the missing-feature count is
+shown explicitly; a null Greek, IV or OI change is never treated as zero.
+
+To avoid choosing winning historical timestamps after seeing the outcome,
+all eligible decision minutes are sampled using a fixed grid anchored at
+09:15 IST, once every selected horizon minutes **per fixed-contract/day**.
+The grid does not inspect future outcomes; a continuous forward path is still
+needed to label historical outcomes. For example at H=30, potential sample
+decisions are 09:15, 09:45, 10:15, ... when enough preceding minutes exist.
+
+Expired cycles are divided CHRONOLOGICALLY: oldest 75% (subject to at least
+two most recent expiry groups) in training-period descriptions, newest expiry
+groups in the separate holdout. No screen parameters are learned or adjusted
+using the holdout or even the earlier period. If fewer than **6 unique
+expiries** remain after the validity/sample gates, the holdout report is
+\`INSUFFICIENT_EXPIRY_DIVERSITY_NO_HOLDOUT_CLAIM\` and omits numerical fold
+metrics entirely. Each frozen rule reports per multiplier (2, 3, 5, 10):
+\`TP/FP/FN/TN\`, alert count, precision, recall, false-positive rate, baseline
+prevalence, and descriptive precision-to-prevalence ratio. When no alerts
+or eligible positives exist, undefined ratios are **null**, never 0/100%.
+
+**Critically:** any reported fold still has \`prediction_validated: false\`,
+\`historical_source_verified: false\` and \`trading_signal: null\`.
+Contracts in a given expiry are correlated; sharing an expiry/date does not
+create new independent trials. There is no price-execution benchmark with
+bid/ask, charges, slippage or orders. Do not describe the resulting metrics
+as live-trading accuracy, expected profits, or a validated Gamma mechanism.
+
+The normal local CLI runs both the earlier case/control screen and this
+holdout probe, without sending local CSVs anywhere. The output file list may
+contain identifying local folder paths; redact that list if sharing the
+generated JSON. 
