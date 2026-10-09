@@ -44,6 +44,7 @@ def test_plan_preview_has_no_broker_login_or_archive_files(tmp_path):
     args = options(tmp_path)
     args.from_date = date(2021, 1, 1)
     args.through = TODAY
+    args.quarter = None  # Full-period preview, not the one-quarter pilot.
     result = archive.run(args, client=None)
     assert result["status"] == "PREVIEW_NO_API_CALLS"
     assert result["excluded_old_quarters"] == ["2021Q1", "2021Q2", "2021Q3"]
