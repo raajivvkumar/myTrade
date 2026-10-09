@@ -1,0 +1,5 @@
+# Optional Vedic astronomy research dependency.
+# Imports as: import swisseph
+# Swiss Ephemeris uses AGPL or commercial licensing; review before distribution/hosting.
+# pysweph has Windows CPython 3.12 binary wheels (as of 2026-10).
+pysweph==2.10.3.6
