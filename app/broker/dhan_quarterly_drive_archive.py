@@ -226,7 +226,6 @@ def archive_quarter(q, *, client, staging, remote, intervals=INTERVALS,
     """
     if q.eligible_from is None or q.zip_name is None:
         return {"quarter": q.key, "status": q.status, "calls": 0}
-    staging.mkdir(parents=True, exist_ok=True)
     part_path = staging / (q.zip_name + ".partial")
     final_path = staging / q.zip_name
     if final_path.exists() and part_path.exists():
@@ -245,6 +244,7 @@ def archive_quarter(q, *, client, staging, remote, intervals=INTERVALS,
             "requests": 0, "new_calls": 0,
             "coverage_status": "NOT_RECHECKED_THIS_RUN",
         }
+    staging.mkdir(parents=True, exist_ok=True)
     if final_path.exists():
         # A completed validated ZIP can be retried after an upload failure.
         outcome = upload_fn(final_path, remote)
