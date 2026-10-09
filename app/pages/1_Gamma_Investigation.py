@@ -26,14 +26,14 @@ st.caption(
     "read-only, no trading or automatic archive"
 )
 st.warning(
-    "Higher Gamma sensitivity is NOT a prediction of 3×/5×/10× premium. "
+    "Higher Gamma sensitivity is NOT a prediction of 2×/3×/5×/10× premium. "
     "Spreads, Theta, IV, Delta, liquidity and contract expiry can dominate outcomes."
 )
 
 live_tab, evidence_tab, case_tab, legacy_tab = st.tabs(
     ["Live NIFTY option-chain investigation",
      "Single-contract fingerprint experiment",
-     "3×/5×/10× events vs non-events",
+     "2×/3×/5×/10× events vs non-events",
      "Legacy tick CSV validation gate"]
 )
 
@@ -142,7 +142,7 @@ with live_tab:
             st.rerun()
 
 with evidence_tab:
-    st.subheader("Investigate observed 3×, 5× and 10× option price moves")
+    st.subheader("Investigate observed 2×, 3×, 5× and 10× option price moves")
     st.caption(
         "Optional CSV is processed only in memory. No Parquet, SQLite, "
         "Google Drive or broker upload is performed."
@@ -186,11 +186,15 @@ with evidence_tab:
             st.warning("No continuous 60-minute lookback + complete forward windows.")
         else:
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Eligible starting minutes", summary["eligible_windows"])
-            c2.metric("Volume >2× watch windows", summary["volume_2x_windows"])
+            c1.metric("Observed ≥2× windows", summary["observed_2x"])
+            c2.metric("Observed ≥3× windows", summary["observed_3x"])
             c3.metric("Observed ≥5× windows", summary["observed_5x"])
             c4.metric("Observed ≥10× windows", summary["observed_10x"])
             st.caption(
+                f"Eligible starting minutes: {summary['eligible_windows']} | "
+                f"Volume ≥2× watch windows: {summary['volume_2x_windows']}. "
+                "Premium ≥2× means a future minute CLOSE / next-minute OPEN ≥2; "
+                "volume ≥2× is a separate precursor hypothesis. "
                 "These windows overlap and are not independent samples. "
                 "Prices are retrospective maximum future minute closes, NOT "
                 "executed orders or verified Gamma causation."
@@ -201,7 +205,7 @@ with evidence_tab:
                     "Volume >2× cohort rate": summary[f"flagged_{n}x_rate"],
                     "Other eligible cohort rate": summary[f"unflagged_{n}x_rate"],
                 }
-                for n in (3, 5, 10)
+                for n in (2, 3, 5, 10)
             ])
             st.dataframe(comparison, hide_index=True, use_container_width=True)
             if not summary["gamma_history_present"]:
@@ -212,7 +216,7 @@ with evidence_tab:
             rows = st.session_state["gamma_in_memory_observations"]
             st.dataframe(
                 rows.loc[
-                    rows.observed_ge_3x | rows.watch_volume_2x
+                    rows.observed_ge_2x | rows.watch_volume_2x
                 ].head(100),
                 hide_index=True, use_container_width=True,
             )
@@ -232,7 +236,7 @@ with evidence_tab:
 with case_tab:
     from app.research.gamma_event_study import investigate_events
 
-    st.subheader("Repeated Gamma fingerprints — real 3×/5×/10× events vs non-events")
+    st.subheader("Repeated Gamma fingerprints — 2×/3×/5×/10× retrospective events vs non-events")
     st.caption(
         "Upload multiple CSVs, ONE true fixed NIFTY option contract in EACH file. "
         "Browser/session-memory only; no automatic archive or broker request."
@@ -282,12 +286,15 @@ with case_tab:
     case_report = st.session_state.get("gamma_case_report")
     if case_report:
         st.write(f"**Status:** {case_report['status']}")
-        a, b, c, d = st.columns(4)
-        a.metric("Observed ≥3× episodes", case_report["observed_3x_events"])
-        b.metric("Observed ≥5× episodes", case_report["observed_5x_events"])
-        c.metric("Observed ≥10× episodes", case_report["observed_10x_events"])
-        d.metric("Matched non-events", case_report["matched_controls"])
+        a, b, c, d, e = st.columns(5)
+        a.metric("Observed ≥2× episodes", case_report["observed_2x_events"])
+        b.metric("Observed ≥3× episodes", case_report["observed_3x_events"])
+        c.metric("Observed ≥5× episodes", case_report["observed_5x_events"])
+        d.metric("Observed ≥10× episodes", case_report["observed_10x_events"])
+        e.metric("Matched <2× controls", case_report["matched_controls"])
         st.caption(
+            "Counts refer to non-overlapping ≥2× episodes; higher multipliers are " 
+            "nested within that case cohort. Controls require observed <2×. " 
             f"Unique event dates: {case_report.get('unique_event_dates', 0)} | "
             f"Expiries: {case_report.get('unique_event_expiries', 0)} | "
             f"Contracts: {case_report.get('unique_event_contracts', 0)}"
