@@ -48,7 +48,7 @@ def test_plan_preview_has_no_broker_login_or_archive_files(tmp_path):
     result = archive.run(args, client=None)
     assert result["status"] == "PREVIEW_NO_API_CALLS"
     assert result["excluded_old_quarters"] == ["2021Q1", "2021Q2", "2021Q3"]
-    assert result["estimated_readonly_dhan_calls"] > 15000
+    assert result["estimated_readonly_dhan_calls"] == 21280  # 76 windows * 140 series * 2 intervals
     assert result["intervals_minutes"] == [1, 5]
     assert not tmp_path.joinpath("stage").exists()
     assert result["archived_quarters"] == []
