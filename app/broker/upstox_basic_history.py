@@ -139,16 +139,32 @@ def fetch_day_1m(instrument_key: str, trading_day: str, *,
 
 def candle_quality(candles: list[dict]) -> dict:
     """Surface gaps; do not turn missing timestamps into invented prices."""
-    minute_ids = {
-        datetime.fromisoformat(row["timestamp"]).astimezone(IST).strftime("%H:%M")
+    times = [
+        datetime.fromisoformat(row["timestamp"]).astimezone(IST)
         for row in candles
-        if SESSION_START <= datetime.fromisoformat(row["timestamp"]).astimezone(IST).time() <= SESSION_LAST_START
-    }
+    ]
+    regular = [
+        dt for dt in times
+        if SESSION_START <= dt.time() <= SESSION_LAST_START
+        and dt.second == 0 and dt.microsecond == 0
+    ]
+    minute_ids = {(dt.date(), dt.hour, dt.minute) for dt in regular}
+    session_dates = {dt.date() for dt in times}
+    off_session = len(times) - len(regular)
+    is_complete = (
+        len(candles) == 375
+        and len(minute_ids) == 375
+        and off_session == 0
+        and len(session_dates) == 1
+        and min(dt.time() for dt in regular) == SESSION_START
+        and max(dt.time() for dt in regular) == SESSION_LAST_START
+    )
     return {
         "observed_candles": len(candles),
         "regular_session_minutes": len(minute_ids),
-        "missing_regular_minutes": 375 - len(minute_ids),
-        "research_ready_contiguous_session": len(minute_ids) == 375,
+        "missing_regular_minutes": max(0, 375 - len(minute_ids)),
+        "off_session_candles": off_session,
+        "research_ready_contiguous_session": is_complete,
         "first": candles[0]["timestamp"] if candles else None,
         "last": candles[-1]["timestamp"] if candles else None,
     }
