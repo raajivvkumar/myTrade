@@ -18,7 +18,10 @@ import zipfile
 
 import pandas as pd
 
-from app.research.gamma_event_study import investigate_events, _count_conditions
+from app.research.gamma_event_study import (
+    investigate_events, _count_conditions, _timestamp_candidates,
+)
+from app.research.gamma_fingerprint_validation import evaluate_frozen_fingerprints
 
 REQUIRED_MINUTE = frozenset({
     "timestamp", "open", "high", "low", "close", "volume", "oi",
@@ -67,6 +70,7 @@ def _empty_report() -> dict:
         "unique_expiries": 0,
         "unique_fixed_contract_keys": 0,
         "candidate_condition_comparison": {},
+        "fingerprint_holdout": None,
         "source_files": [],
         "unscanned_container_types": {},
     }
@@ -87,6 +91,7 @@ def scan_directory(root: Path, *, horizon: int = 30,
     seen_contract_days = set()
     events_list = []
     controls_list = []
+    all_decision_windows = []
     unique_dates = set()
     unique_expiries = set()
     keys = set()
@@ -131,6 +136,11 @@ def scan_directory(root: Path, *, horizon: int = 30,
             events, controls, summary = investigate_events(
                 [frame], horizon=horizon, min_premium=min_premium,
             )
+            # Use ALL eligible starts, not only ex-post positive episodes.
+            # Fixed clock-grid selection in the validator ignores future labels.
+            candidate_windows = _timestamp_candidates(
+                frame, horizon=horizon, min_premium=min_premium,
+            )
             seen_contract_days.update((identity, day) for day in days)
         except (ValueError, TypeError, KeyError, AttributeError, pd.errors.ParserError) as exc:
             # No individual broker data or secrets in errors.
@@ -144,6 +154,8 @@ def scan_directory(root: Path, *, horizon: int = 30,
                 summary[f"observed_{threshold}x_events"]
             )
         output["matched_below_2x_controls"] += int(summary["matched_controls"])
+        if not candidate_windows.empty:
+            all_decision_windows.append(candidate_windows)
         if not events.empty:
             events_list.append(events)
             unique_dates.update(pd.to_datetime(events.signal_ist).dt.date)
@@ -227,6 +239,11 @@ def scan_directory(root: Path, *, horizon: int = 30,
                 else None
             ),
         }
+    output["fingerprint_holdout"] = evaluate_frozen_fingerprints(
+        pd.concat(all_decision_windows, ignore_index=True)
+        if all_decision_windows else pd.DataFrame(),
+        horizon=horizon,
+    )
     output["horizon_minutes"] = horizon
     output["minimum_entry_premium"] = min_premium
     return output
