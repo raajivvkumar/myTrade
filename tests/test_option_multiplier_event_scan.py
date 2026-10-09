@@ -70,7 +70,8 @@ def test_known_negative_requires_full_uninterrupted_horizon():
 def test_strike_change_breaks_future_identity_no_fake_premium_profit():
     frame = bars(n=90)
     frame.loc[20:, "actual_strike"] = 22450.0
-    frame.loc[21:, ["close", "high"]] = 200.0
+    # Strike-switch jump is not a within-contract price multiplier.
+    frame.loc[20:, ["open", "close", "high"]] = 200.0
     found = summarize_scans([scan(frame, horizon=60)])
     assert found["strike_switches"] == 1
     assert found["thresholds"]["2x"][
@@ -80,8 +81,9 @@ def test_strike_change_breaks_future_identity_no_fake_premium_profit():
 def test_missing_minute_splits_and_avoids_false_event():
     frame = bars(100)
     frame = frame.drop(index=35).reset_index(drop=True)
+    # After a gap, a different stable price regime must not bridge the gap.
     frame.loc[frame.timestamp >= pd.Timestamp("2026-10-06 09:51"), [
-        "close", "high"]] = 200
+        "open", "close", "high"]] = 200
     found = summarize_scans([scan(frame, horizon=60)])
     assert found["missing_minute_splits"] == 1
     assert found["thresholds"]["2x"]["positive_anchor_windows_overlapping"] == 0
