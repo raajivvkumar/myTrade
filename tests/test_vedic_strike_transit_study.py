@@ -52,12 +52,16 @@ def test_invalid_strikes_are_rejected():
 
 def test_planet_star_change_maps_to_correct_22400_strike(monkeypatch):
     monkeypatch.setattr(astro, "session_transits", fake_transition)
+    monkeypatch.setattr(astro, "sidereal_positions", lambda t, precision="seconds": {
+        "zodiac": "Vedic sidereal Lahiri", "planets": {
+            "Moon": {"rashi": "Vrishabha", "nakshatra": "Mrigashira"}}})
     frame = stable()
     result = astro.transit_strike_observations(
         frame, series="WEEK_1_ATM_CALL", expiry_flag="WEEK", expiry_code=1)
     assert result["eligible_transit_strike_observations"] == 1
     effect = result["observations"][0]
     assert effect["strike"]["compound_total"] == 8
+    assert effect["vedic_chart_at_transition"]["planets"]["Moon"]["rashi"] == "Vrishabha"
     assert effect["date_numerology"]["date_root_number"] == 8
     assert effect["calculated_transition_time_ist"] == "2026-10-06T11:00:07+05:30"
     assert effect["observed_first_minute_label_ist"] == "2026-10-06T11:01+05:30"
