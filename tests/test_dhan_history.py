@@ -9,7 +9,7 @@ from app.broker import dhan_history as history
 
 
 def plan():
-    return history.make_plan(date(2026, 10, 8), date(2026, 10, 9), ["ATM"], "WEEK", 0)
+    return history.make_plan(date(2026, 10, 8), date(2026, 10, 9), ["ATM"], "WEEK", 1)
 
 
 def response(rolling=False):
@@ -25,7 +25,7 @@ def response(rolling=False):
 
 def test_five_year_plan_latest_first_no_overlap():
     beginning, through = date(2021, 10, 9), date(2026, 10, 9)
-    entries = history.make_plan(beginning, through, ["ATM"], "WEEK", 0)
+    entries = history.make_plan(beginning, through, ["ATM"], "WEEK", 1)
     assert len(entries) == 183
     windows = entries[::3]
     assert windows[0]["end"] == "2026-10-10"
@@ -35,6 +35,7 @@ def test_five_year_plan_latest_first_no_overlap():
     assert all(windows[i]["start"] == windows[i+1]["end"] for i in range(len(windows)-1))
     assert entries[0]["series"] == "INDEX"
     assert entries[1]["payload"]["drvOptionType"] == "CALL"
+    assert entries[1]["payload"]["expiryCode"] == 1
     assert entries[2]["payload"]["drvOptionType"] == "PUT"
 
 
@@ -58,7 +59,7 @@ def test_preview_has_no_credentials_network_or_writes(monkeypatch, tmp_path, cap
 @pytest.mark.parametrize("strikes", [[], ["ATM", "ATM"], ["ATM+11"], ["BAD"]])
 def test_bad_plan_rejected(strikes):
     with pytest.raises(ValueError):
-        history.make_plan(date(2026, 10, 8), date(2026, 10, 9), strikes, "WEEK", 0)
+        history.make_plan(date(2026, 10, 8), date(2026, 10, 9), strikes, "WEEK", 1)
 
 
 def test_midnight_boundaries_and_leap_year():
@@ -196,8 +197,8 @@ def test_corrupt_cache_reports_failure_without_deleting_originals(monkeypatch, t
 
 
 def test_index_only_uses_same_index_entries_and_keeps_latest_first():
-    full = history.make_plan(date(2021, 10, 9), date(2026, 10, 9), ["ATM"], "WEEK", 0)
-    indices = history.make_plan(date(2021, 10, 9), date(2026, 10, 9), ["ATM"], "WEEK", 0,
+    full = history.make_plan(date(2021, 10, 9), date(2026, 10, 9), ["ATM"], "WEEK", 1)
+    indices = history.make_plan(date(2021, 10, 9), date(2026, 10, 9), ["ATM"], "WEEK", 1,
                                 index_only=True)
     assert len(indices) == 61
     assert indices == full[::3]
@@ -215,7 +216,7 @@ def test_option_api_failure_after_cached_index_is_actionable(monkeypatch, tmp_pa
     with pytest.raises(history.BackfillError) as raised:
         history.collect(plan(), tmp_path, client=client)
     error = raised.value.details
-    assert error["series"] == "WEEK_0_ATM_CALL"
+    assert error["series"] == "WEEK_1_ATM_CALL"
     assert error["stage"] == "REQUEST"
     assert error["http_status"] == 400
     assert error["provider_code"] == "DH-905"
@@ -277,7 +278,7 @@ def test_cli_prints_safe_structured_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(history, "datetime", Clock)
     monkeypatch.setattr(history, "load_local_credentials", lambda: None)
     monkeypatch.setattr("sys.argv", ["history", "--through", "2026-10-09", "--execute"])
-    details = dict(stage="REQUEST", series="WEEK_0_ATM_CALL", http_status=400, provider_code="DH-905")
+    details = dict(stage="REQUEST", series="WEEK_1_ATM_CALL", http_status=400, provider_code="DH-905")
     def fail(*args, **kwargs):
         raise history.BackfillError(details, "synthetic-secret-error")
     monkeypatch.setattr(history, "collect", fail)
@@ -285,3 +286,46 @@ def test_cli_prints_safe_structured_failure(monkeypatch, tmp_path):
         history.main()
     assert '"provider_code": "DH-905"' in str(raised.value)
     assert "synthetic-secret" not in str(raised.value)
+
+
+def test_backfill_cli_default_uses_near_code_one(monkeypatch, capsys):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 9, 12, tzinfo=tz)
+    monkeypatch.setattr(history, "datetime", Clock)
+    monkeypatch.setattr("sys.argv", ["history", "--through", "2026-10-09"])
+    history.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["newest"][1]["payload"]["expiryCode"] == 1
+    assert report["newest"][1]["series"] == "WEEK_1_ATM_CALL"
+
+
+def test_backfill_cli_code_zero_rejected_before_credentials(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Invalid expiry code must not read credentials")
+    monkeypatch.setattr(history, "load_local_credentials", forbidden)
+    monkeypatch.setattr("sys.argv", ["history", "--expiry-code", "0", "--execute"])
+    with pytest.raises(SystemExit) as raised:
+        history.main()
+    assert raised.value.code == 2
+
+
+def test_expiry_correction_reuses_index_but_does_not_rename_zero_option_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(history.time, "sleep", lambda _: None)
+    entries = plan()
+    old_index = entries[0]
+    # Index request is independent of the option expiry selector.
+    legacy_call = dict(entries[1], series="WEEK_0_ATM_CALL",
+                       payload=dict(entries[1]["payload"], expiryCode=0))
+    history.save_chunk(tmp_path, old_index, response(),
+                       history.parse_bars(response(), old_index))
+    legacy_raw = response(True)
+    legacy_path = history.chunk_base(tmp_path, legacy_call).with_suffix(".parquet")
+    history.save_chunk(tmp_path, legacy_call, legacy_raw,
+                       history.parse_bars(legacy_raw, legacy_call))
+    legacy_hash = history.file_hash(legacy_path)
+    report = history.collect(entries, tmp_path, client=Client())
+    assert report["completed_chunks"] == 3
+    assert history.file_hash(legacy_path) == legacy_hash
+    assert all(item["series"] != "WEEK_0_ATM_CALL" for item in report["yearly"])

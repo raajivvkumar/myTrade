@@ -29,7 +29,8 @@ def parser():
     r.add_argument("--from-date", type=date.fromisoformat, required=True)
     r.add_argument("--to-date", type=date.fromisoformat, required=True, help="Exclusive end date")
     r.add_argument("--expiry-flag", choices=("WEEK", "MONTH"), default="MONTH")
-    r.add_argument("--expiry-code", choices=(0, 1, 2), type=int, default=0)
+    r.add_argument("--expiry-code", choices=(1, 2, 3), type=int, default=1,
+                   help="Expired rolling options: 1=near, 2=next, 3=far")
     r.add_argument("--strike", default="ATM")
     r.add_argument("--side", choices=("CALL", "PUT"), default="PUT")
     r.add_argument("--interval", choices=(1, 5, 15, 25, 60), type=int, default=1)

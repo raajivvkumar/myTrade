@@ -52,7 +52,7 @@ class RollingQuery:
     start: date
     end: date  # exclusive
     expiry_flag: str = "MONTH"
-    expiry_code: int = 0
+    expiry_code: int = 1  # expired rolling API: 1=near, 2=next, 3=far
     strike: str = "ATM"
     side: str = "PUT"
     interval: int = 1
@@ -60,10 +60,15 @@ class RollingQuery:
     def __post_init__(self):
         if self.start >= self.end or (self.end - self.start).days > 30:
             raise ValueError("Use a positive window of at most 30 calendar days")
-        if self.expiry_flag not in ("MONTH", "WEEK") or self.expiry_code not in (0, 1, 2):
-            raise ValueError("Unsupported expiry flag/code")
+        if self.expiry_flag not in ("MONTH", "WEEK"):
+            raise ValueError("Unsupported expiry flag")
+        # This endpoint differs from the generic annexure's 0/1/2 mapping.
+        if type(self.expiry_code) is not int or self.expiry_code not in (1, 2, 3):
+            raise ValueError("Expired rolling options require expiry code 1 (near), 2 (next), or 3 (far); 0 is invalid")
         if not STRIKE_RE.fullmatch(self.strike):
             raise ValueError("Only ATM, ATM+1..ATM+10, ATM-1..ATM-10 supported")
+        if self.expiry_code != 1 and self.strike != "ATM" and abs(int(self.strike[3:])) > 3:
+            raise ValueError("Next/far rolling expiry supports only ATM offsets up to 3")
         if self.side not in ("CALL", "PUT") or self.interval not in (1, 5, 15, 25, 60):
             raise ValueError("Unsupported option side or interval")
 

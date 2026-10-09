@@ -380,7 +380,8 @@ def main():
     parser.add_argument("--from-date", type=date.fromisoformat)
     parser.add_argument("--strikes", nargs="+", default=["ATM"])
     parser.add_argument("--expiry-flag", choices=["WEEK", "MONTH"], default="WEEK")
-    parser.add_argument("--expiry-code", type=int, choices=[0, 1, 2], default=0)
+    parser.add_argument("--expiry-code", type=int, choices=[1, 2, 3], default=1,
+                        help="Expired rolling options: 1=near, 2=next, 3=far")
     parser.add_argument("--output-dir", default="data/raw/dhan/backfill/NIFTY")
     parser.add_argument("--pause-seconds", type=float, default=1)
     parser.add_argument("--max-requests", type=int)

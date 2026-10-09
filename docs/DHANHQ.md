@@ -49,7 +49,7 @@ Connection evidence supplied by the user: a local 2026-10-08 probe reported an A
 
 ## Preview (no credentials needed)
 
-    python -m app.broker.dhan_cli rolling --from-date 2026-03-23 --to-date 2026-03-25 --expiry-flag MONTH --expiry-code 0 --strike ATM --side PUT
+    python -m app.broker.dhan_cli rolling --from-date 2026-03-23 --to-date 2026-03-25 --expiry-flag MONTH --expiry-code 1 --strike ATM --side PUT
 
 End date is exclusive. This previews request windows of 30 days maximum and paths. No Data API calls occur.
 
@@ -59,7 +59,7 @@ End date is exclusive. This previews request windows of 30 days maximum and path
 
 Profile checks Data API plan state. After it reports Active, run one small data smoke test:
 
-    python -m app.broker.dhan_cli rolling --from-date 2026-03-23 --to-date 2026-03-25 --expiry-flag MONTH --expiry-code 0 --strike ATM --side PUT --execute
+    python -m app.broker.dhan_cli rolling --from-date 2026-03-23 --to-date 2026-03-25 --expiry-flag MONTH --expiry-code 1 --strike ATM --side PUT --execute
 
 This sends only GET /v2/profile and POST /v2/charts/rollingoption; no orders are supported. First successful response saves a Parquet file under data/raw/dhan/rolling/NIFTY/ and a JSON provenance manifest. Existing files are not overwritten. All outputs are marked UNVALIDATED. Repeat with --side CALL or documented ATM offsets only after checking the sample.
 
@@ -88,7 +88,7 @@ Source control holds a blank .env.example; your real .env is git-ignored. If any
 
 The user explicitly requested this historical collection. The new command saves local broker responses under the ignored data directory, separately from the earlier memory-only probe. It does not modify the original Candle Lab or upload market data to GitHub.
 
-As of 2026-10-09, the inclusive requested range is 2021-10-09 through 2026-10-09. The default selects NIFTY 50 index one-minute bars and ATM CALL/PUT rolling series with WEEK expiry flag and expiry code 0. It processes newest windows first, with at most 30 calendar days per window and an exclusive next-day end. This is 61 windows, 183 historical requests plus a profile check. Data for the current day may be incomplete.
+As of 2026-10-09, the inclusive requested range is 2021-10-09 through 2026-10-09. The default selects NIFTY 50 index one-minute bars and ATM CALL/PUT rolling series with WEEK expiry flag and expiry code 1 (Near). It processes newest windows first, with at most 30 calendar days per window and an exclusive next-day end. This is 61 windows, 183 historical requests plus a profile check. Data for the current day may be incomplete.
 
 From your existing Git Bash checkout:
 
@@ -109,7 +109,7 @@ python -m app.broker.dhan_history --through 2026-10-09 --execute
 
 Keep any local changes if Git refuses a switch or pull. Repeating the exact command resumes from verified cached chunks instead of requesting them again. Keep the same --through and --from-date for stable request boundaries; moving the range produces a different chunk plan. A later run must stay within the provider's then-current five-year retention window. --max-requests 3 limits a pilot to three new data calls; --retry-empty revisits cached empty responses. An expired token, provider failure or validation failure stops the run after saving an incremental summary. Refresh the token locally and resume; cache corruption is retained for inspection and reported, never automatically deleted.
 
-Optional relative strikes use the documented syntax, for example --strikes ATM ATM+1 ATM-1. --expiry-flag MONTH and --expiry-code 1 or 2 select other documented rolling buckets. Each extra relative strike adds two option requests per window. The default is a bounded research starting set, not every strike and historical expiry.
+Optional relative strikes use the documented syntax, for example --strikes ATM ATM+1 ATM-1. Near index expiry supports offsets up to 10; Next/Far is limited to offsets up to 3. --expiry-flag MONTH selects monthly rolling data; --expiry-code 2 (Next) or 3 (Far) selects other expiry buckets. Expired rolling options use 1=Near, 2=Next, 3=Far, unlike the generic annexure's 0/1/2 mapping. Code 0 is rejected locally. Each extra relative strike adds two option requests per window. The default is a bounded research starting set, not every strike and historical expiry.
 
 Outputs:
 
@@ -156,3 +156,22 @@ python -m app.broker.dhan_history --through 2026-10-09 --index-only --execute
 This uses the same 61 index windows and verifies/reuses existing index chunks. It makes no rolling-option requests and cannot establish option Gamma fingerprints. The summary describes the current run's selected scope; prior chunks and last_failure.json remain on disk.
 
 Provider error-code meanings are documented at https://dhanhq.co/docs/v2/annexure/. For example DH-905 denotes invalid/missing request inputs; DH-907 can mean incorrect parameters or unavailable data. A diagnostic code is evidence for investigation, not an automatic permission to bypass provider limits or fabricate missing candles.
+
+## Correcting DH-905 for the expired-options expiry selector
+
+The observed WEEK_0_ATM_CALL request was invalid for /charts/rollingoption. Dhan's endpoint-specific mapping is 1=Near, 2=Next, 3=Far; 0 is not accepted here. The older generic annexure uses different codes for other endpoints, which caused the original default to be wrong. Both rolling and historical-backfill commands now default to 1, accept 1/2/3, and reject 0 before loading credentials or making requests.
+
+Provider clarification:
+https://madefortrade.in/t/v2-charts-rollingoption-expirycode-0-gives-dh-905-expirycode-is-required-mapping-changed/60509
+
+Current endpoint documentation:
+https://docs.dhanhq.co/api/v2/expired-options-data/get-expired-options-data
+
+Retry with the same date range after pulling the fix:
+
+```bash
+git pull --ff-only
+python -m app.broker.dhan_history --through 2026-10-09 --expiry-code 1 --execute
+```
+
+Existing index entries are identical and their caches are reused. Legacy option code-0 chunks, if any, remain untouched and are never silently renamed into code-1 chunks. Changing from code 0 to code 1 is an actual request correction, not relabeling previously collected contracts. A real successful option response still needs to be observed; offline tests alone do not establish live provider success or fixed-contract identity.

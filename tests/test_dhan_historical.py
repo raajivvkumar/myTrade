@@ -27,6 +27,7 @@ def response():
 def test_request_and_windows():
     q = query()
     assert q.payload()["securityId"] == 13
+    assert q.payload()["expiryCode"] == 1
     assert q.payload()["toDate"] == "2026-03-25"
     parts = list(windows(date(2026, 1, 1), date(2026, 4, 1)))
     assert parts[0] == (date(2026, 1, 1), date(2026, 1, 31))
@@ -81,9 +82,38 @@ def test_readonly_allowlist_and_no_token_leak():
 def test_default_dry_run_needs_no_data_plan(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("DHAN_ACCESS_TOKEN", raising=False)
     args = Namespace(from_date=date(2026, 3, 23), to_date=date(2026, 3, 25),
-                     expiry_flag="MONTH", expiry_code=0, strike="ATM",
+                     expiry_flag="MONTH", expiry_code=1, strike="ATM",
                      side="PUT", interval=1, output_dir=str(tmp_path),
                      pause_seconds=1, execute=False)
     run_rolling(args)
     assert "DRY RUN" in capsys.readouterr().out
     assert not list(tmp_path.rglob("*"))
+
+
+@pytest.mark.parametrize("code", [1, 2, 3])
+def test_expired_rolling_uses_endpoint_specific_one_based_codes(code):
+    assert query(expiry_code=code).payload()["expiryCode"] == code
+
+
+@pytest.mark.parametrize("code", [0, True, -1, 4])
+def test_invalid_expired_codes_are_rejected_before_broker_access(code, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Invalid expiry code must fail before creating a broker client")
+    monkeypatch.setattr("app.broker.dhan_cli.DhanClient", forbidden)
+    args = Namespace(from_date=date(2026, 3, 23), to_date=date(2026, 3, 25),
+                     expiry_flag="WEEK", expiry_code=code, strike="ATM",
+                     side="CALL", interval=1, output_dir=None,
+                     pause_seconds=1, execute=True)
+    with pytest.raises(ValueError, match="expiry code"):
+        run_rolling(args)
+
+
+@pytest.mark.parametrize("code,strike", [(2, "ATM+4"), (3, "ATM-4")])
+def test_next_far_offsets_outside_provider_range_fail_locally(code, strike):
+    with pytest.raises(ValueError, match="offsets up to 3"):
+        query(expiry_code=code, strike=strike)
+
+
+def test_near_offsets_and_far_supported_offsets_remain_available():
+    assert query(expiry_code=1, strike="ATM+10").payload()["strike"] == "ATM+10"
+    assert query(expiry_code=3, strike="ATM-3").payload()["strike"] == "ATM-3"
