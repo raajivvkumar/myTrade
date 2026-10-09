@@ -218,7 +218,7 @@ def _get_broker_frame(client, request, series, sleeper, delay):
 
 def archive_quarter(q, *, client, staging, remote, intervals=INTERVALS,
                     pause=.35, sleeper=time.sleep, upload_fn=upload_verified,
-                    progress=False):
+                    progress=False, existing_remote_names=None):
     """Resume a quarter locally, upload one ZIP, then delete only its staging file.
 
     The staging .partial is retained on API or upload failures to avoid
@@ -231,6 +231,20 @@ def archive_quarter(q, *, client, staging, remote, intervals=INTERVALS,
     final_path = staging / q.zip_name
     if final_path.exists() and part_path.exists():
         raise RuntimeError("Found final ZIP and partial ZIP for same quarter")
+    # A previous quarter may already have been uploaded in a past run.
+    # Do NOT burn another 800+ Dhan requests or overwrite it. We can
+    # verify its provider MD5 exists, but cannot compare it with a
+    # deleted local ZIP, so explicitly disclose that limitation.
+    if (not final_path.exists() and not part_path.exists()
+            and existing_remote_names is not None
+            and q.zip_name in existing_remote_names):
+        checksum = _remote_md5(remote, q.zip_name)
+        return {
+            "quarter": q.key, "status": "EXISTING_REMOTE_ARCHIVE_UNVERIFIED_THIS_RUN",
+            "remote_md5_observed": checksum,
+            "requests": 0, "new_calls": 0,
+            "coverage_status": "NOT_RECHECKED_THIS_RUN",
+        }
     if final_path.exists():
         # A completed validated ZIP can be retried after an upload failure.
         outcome = upload_fn(final_path, remote)
@@ -395,6 +409,8 @@ def run(args, *, client=None, sleeper=time.sleep,
         output["status"] = "BLOCKED_DHAN_DATA_PLAN_INACTIVE"
         return output
     staging = Path(args.staging).expanduser().resolve()
+    existing_remote_names = (_remote_names(args.remote)
+                             if verify_remote else set())
     output["status"] = "IN_PROGRESS"
     for q in selected:
         try:
@@ -402,7 +418,8 @@ def run(args, *, client=None, sleeper=time.sleep,
                 q, client=client, staging=staging,
                 remote=args.remote, intervals=args.intervals,
                 pause=args.pause, sleeper=sleeper,
-                upload_fn=uploader, progress=args.progress)
+                upload_fn=uploader, progress=args.progress,
+                existing_remote_names=existing_remote_names)
         except (DhanAPIError, ValueError, RuntimeError,
                 OSError, zipfile.BadZipFile) as exc:
             output["status"] = "STOPPED_PARTIAL_LOCAL_STAGING_RETAINED"
@@ -412,8 +429,16 @@ def run(args, *, client=None, sleeper=time.sleep,
                                      exc, DhanAPIError) else None}
             return output
         output["archived_quarters"].append(outcome)
-    output["status"] = ("ALL_SELECTED_QUARTERS_UPLOADED"
-                        if selected else "NO_ELIGIBLE_QUARTERS")
+        if outcome["status"] in ("UPLOADED_MD5_VERIFIED",
+                                 "ALREADY_PRESENT_MD5_VERIFIED"):
+            existing_remote_names.add(q.zip_name)
+    verified_states = ("UPLOADED_MD5_VERIFIED", "ALREADY_PRESENT_MD5_VERIFIED")
+    output["status"] = (
+        "NO_ELIGIBLE_QUARTERS" if not selected
+        else ("ALL_SELECTED_QUARTERS_UPLOADED"
+              if all(x["status"] in verified_states
+                     for x in output["archived_quarters"])
+              else "EXISTING_REMOTE_QUARTERS_NOT_REVERIFIED"))
     output["all_requested_quarters_covered"] = bool(
         len(selected) == len(quarters)
         and all(x["status"] in ("UPLOADED_MD5_VERIFIED",
