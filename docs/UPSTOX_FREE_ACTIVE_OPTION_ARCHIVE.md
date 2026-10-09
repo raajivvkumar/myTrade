@@ -42,3 +42,13 @@ Each path is scoped by actual NIFTY expiry, strike+CE/PE and SHA256 hash of inst
 Orders, trades, unattended scheduling, automatic Google Drive upload, old expired-option downloading and in-repo data commits are NOT supported. Live-session data cannot be saved before 15:31 IST. Store backups privately according to Upstox/NSE market-data policies.
 
 Next milestone: verify real active option returns on user PC, then add a LIMITED approval-gated multi-strike end-of-day runner and expiry-aware quality manifest. Do not label current spot or current Greek snapshots as historical option data.
+
+## Later: verify offline AFTER option expiry, without any Upstox token
+
+    python -m app.data.option_archive_verify
+
+Or specify separate private source and mirror directories:
+
+    python -m app.data.option_archive_verify --source-dir data/raw/upstox/options_unvalidated --backup-dir ../MyTradeOfflineArchive/upstox_options_v3
+
+This reads the immutable saved Parquet and provenance JSON; compares exact contract/expiry/day identity, primary and mirror SHA256, and checks that both copies remain intact. Neither broker access nor an unexpired contract is needed. This proves local integrity only, NOT exchange source authenticity or lawful redistribution.
