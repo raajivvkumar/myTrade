@@ -10,7 +10,8 @@ NO trading orders, NO Plus-only expired endpoints, NO automatic disk archive.
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from app.broker.upstox_basic_history import (
     INDEX_KEYS, candle_quality, fetch_day_1m, resolve_active_option,
@@ -38,6 +39,8 @@ def run(args: argparse.Namespace, *, session=None, token: str | None = None) -> 
             raise ValueError()
     except ValueError as exc:
         raise ValueError("--date must be YYYY-MM-DD") from exc
+    if date.fromisoformat(args.date) > datetime.now(ZoneInfo("Asia/Kolkata")).date():
+        raise ValueError("Future trading dates cannot have observed candles")
     if args.mode == "option" and (
         args.strike is None or args.side not in ("CE", "PE")
     ):
