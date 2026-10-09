@@ -235,12 +235,12 @@ def investigate_events(
     min_premium: float = 2.0,
     min_events_for_review: int = 20,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """Explore >=3x events + matched same-contract non-events (NO model fitting).
+    """Explore >=2x events + matched same-contract non-events (NO model fitting).
 
-    Positive 3x windows are labeled retrospectively using future option
+    Positive 2x windows are labeled retrospectively using future option
     closes; select earliest non-overlapping event per exact contract.
-    Matched controls must have observed max forward close <3x, no nearby
-    3x candidate, and same fixed contract/day within 2h, similar premium.
+    Matched controls must have observed max forward close <2x, no nearby
+    2x candidate, and same fixed contract/day within 2h, similar premium.
     Never claim to have verified broker source authenticity.
     """
     if not 1 <= horizon <= 120:
@@ -280,17 +280,19 @@ def investigate_events(
         return empty, empty, {
             "status": "NO_COMPLETE_60M_PLUS_FORWARD_WINDOWS",
             "files_supplied": supplied, "eligible_windows": 0,
-            "observed_3x_events": 0, "observed_5x_events": 0,
+            "event_threshold_multiple": 2.0,
+            "observed_2x_events": 0, "observed_3x_events": 0,
+            "observed_5x_events": 0,
             "observed_10x_events": 0, "matched_controls": 0,
             "repeated_patterns": {},
             "window_feature_medians": {},
             "validation": "UNVERIFIED_INPUT_NOT_PREDICTIVE",
         }
     windows = pd.concat(all_windows, ignore_index=True)
-    positives = windows.loc[windows.observed_ge_3x].copy()
+    positives = windows.loc[windows.observed_ge_2x].copy()
     # Independence is still limited across options moving on the same index day.
     events = _select_non_overlapping(positives, horizon=horizon)
-    candidate_negatives = windows.loc[~windows.observed_ge_3x].copy()
+    candidate_negatives = windows.loc[~windows.observed_ge_2x].copy()
     control_rows = []
     used_controls: dict[str, list[pd.Timestamp]] = {}
     for case in events.itertuples(index=False):
@@ -303,7 +305,7 @@ def investigate_events(
             (candidate_negatives.instrument_key == case.instrument_key)
             & (candidate_negatives.expiry == case.expiry)
         ].copy()
-        # Censor negatives whose horizon lies in the neighborhood of ANY 3x window.
+        # Censor negatives whose horizon lies in the neighborhood of ANY 2x window.
         keep = pd.to_datetime(candidate.signal_ist).map(
             lambda t: all(abs(t - pt) >= pd.Timedelta(minutes=horizon)
                           for pt in positive_times)
@@ -324,11 +326,11 @@ def investigate_events(
     controls = (
         pd.DataFrame(control_rows) if control_rows else windows.iloc[0:0].copy()
     )
-    events["cohort"] = "OBSERVED_3X_PLUS"
-    controls["cohort"] = "OBSERVED_BELOW_3X_MATCHED"
+    events["cohort"] = "OBSERVED_2X_PLUS"
+    controls["cohort"] = "OBSERVED_BELOW_2X_MATCHED"
     event_counts = {
         f"observed_{m}x_events": int(events[f"observed_ge_{m}x"].sum())
-        for m in (3, 5, 10)
+        for m in (2, 3, 5, 10)
     }
     by_case = _count_conditions(events)
     by_control = _count_conditions(controls)
@@ -351,6 +353,7 @@ def investigate_events(
                    else "INSUFFICIENT_DIVERSE_EVENTS_OR_MATCHED_CONTROLS"),
         "files_supplied": supplied,
         "eligible_windows": len(windows),
+        "event_threshold_multiple": 2.0,
         **event_counts,
         "matched_controls": len(controls),
         "events_without_matched_controls": len(events) - len(controls),
