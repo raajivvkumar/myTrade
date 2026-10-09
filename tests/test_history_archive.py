@@ -1,3 +1,5 @@
+import ipaddress
+import socket
 import sqlite3
 
 import pandas as pd
@@ -83,15 +85,52 @@ def test_lot_size_conflict_rejected(tmp_path):
     assert archive.load(identity, "FIVE_MINUTE").lot_size.iloc[0] == 65
 
 
+def _block_external_connect(original_connect):
+    """Guard external TCP connections without breaking internal asyncio sockets.
+
+    On Windows asyncio's ProactorEventLoop starts with socket.socketpair(),
+    which uses a 127.0.0.1 TCP connection even when Streamlit is fully
+    offline. AF_UNIX and numeric loopback addresses are local transports.
+    All other socket.connect destinations remain forbidden in this test.
+    """
+    def guarded_connect(sock, address):
+        if sock.family == getattr(socket, "AF_UNIX", None):
+            return original_connect(sock, address)
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            try:
+                host = address[0]
+                if ipaddress.ip_address(host).is_loopback:
+                    return original_connect(sock, address)
+            except (ValueError, TypeError, IndexError, KeyError):
+                pass
+        raise AssertionError(
+            f"Offline history must not contact an external network service: {address!r}"
+        )
+    return guarded_connect
+
+
+def test_offline_connect_policy_rejects_external_network():
+    original_connect = socket.socket.connect
+    guard = _block_external_connect(original_connect)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        with pytest.raises(AssertionError, match="external network service"):
+            guard(sock, ("203.0.113.1", 443))
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sock:
+        with pytest.raises(AssertionError, match="external network service"):
+            guard(sock, ("2001:db8::1", 443, 0, 0))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        with pytest.raises(AssertionError, match="external network service"):
+            guard(sock, ("some.remote.example", 443))
+
+
 def test_offline_dashboard_browses_and_backtests_archive(monkeypatch, tmp_path):
-    import socket
     from pathlib import Path
     from streamlit.testing.v1 import AppTest
 
-    def offline(*args, **kwargs):
-        raise AssertionError("Offline history must not contact a network service")
-
-    monkeypatch.setattr(socket.socket, "connect", offline)
+    monkeypatch.setattr(
+        socket.socket, "connect",
+        _block_external_connect(socket.socket.connect),
+    )
     monkeypatch.setenv("MYTRADE_DATA_DIR", str(tmp_path))
     archive = HistoryArchive(tmp_path / "archive" / "history.sqlite3")
     archive.save(contract(), "FIVE_MINUTE", candles(), source="broker")
