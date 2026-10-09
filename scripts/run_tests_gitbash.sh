@@ -21,7 +21,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Running offline tests using temporary scratch: $scratch"
+# Windows-native Python sometimes does not convert a path embedded in
+# --basetemp=/d/... automatically. Pass a native D:/... path explicitly.
+scratch_for_python="$scratch"
+if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* ]]; then
+  if command -v cygpath >/dev/null 2>&1; then
+    scratch_for_python="$(cygpath -m "$scratch")"
+  else
+    scratch_for_python="$(cd "$scratch" && pwd -W)"
+  fi
+fi
+
+echo "Running offline tests using temporary scratch: $scratch_for_python"
 # --basetemp overrides pytest's default inaccessible %TEMP%/pytest-of-USER path.
 # Disable pytest's repository cache; source and market data remain untouched.
-python -m pytest -q -p no:cacheprovider --basetemp="$scratch" "$@"
+python -m pytest -q -p no:cacheprovider --basetemp="$scratch_for_python" "$@"
