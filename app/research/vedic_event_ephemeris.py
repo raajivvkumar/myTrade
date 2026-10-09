@@ -26,11 +26,16 @@ def _position(longitude, speed=None):
     within = value % 30
     deg = int(within)
     minute = int((within - deg) * 60)
+    span = 360 / 27
+    nakshatra_index = min(26, int(value / span))
+    pada = min(4, int((value % span) / (span / 4)) + 1)
     result = {
         "rashi": RASHIS[int(value // 30)],
         "rashi_degree": deg,
         "rashi_arcminute": minute,
         "sidereal_longitude_degrees": round(value, 6),
+        "nakshatra": NAKSHATRAS[nakshatra_index],
+        "nakshatra_pada": pada,
     }
     if speed is not None:
         result["retrograde"] = float(speed) < 0
@@ -67,11 +72,10 @@ def _positions_at_ist(iso_minute):
             raise RuntimeError("Swiss Ephemeris did not return sidereal coordinates")
         planets[name] = _position(xx[0], xx[3])
     rahu = planets["Rahu"]["sidereal_longitude_degrees"]
-    planets["Ketu"] = _position(rahu + 180)
-    moon = planets["Moon"]["sidereal_longitude_degrees"]
-    span = 360 / 27
-    nakshatra_index = min(26, int(moon / span))
-    pada = min(4, int((moon % span) / (span / 4)) + 1)
+    planets["Ketu"] = _position(
+        rahu + 180, -1.0 if planets["Rahu"].get("retrograde") else 1.0)
+    nakshatra_index = NAKSHATRAS.index(planets["Moon"]["nakshatra"])
+    pada = planets["Moon"]["nakshatra_pada"]
     return {
         "timestamp_ist": iso_minute,
         "zodiac": "Vedic sidereal Lahiri",
@@ -83,7 +87,7 @@ def _positions_at_ist(iso_minute):
     }
 
 
-def sidereal_positions(ist_timestamp):
+def sidereal_positions(ist_timestamp, *, precision="minutes"):
     """At a completed minute-bar timestamp, return Vedic planet/Rashi positions.
 
     Accepts pandas.Timestamp or datetime or ISO string. Naive stamps are assumed
@@ -101,4 +105,6 @@ def sidereal_positions(ist_timestamp):
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=IST)
     stamp = stamp.astimezone(IST)
-    return _positions_at_ist(stamp.isoformat(timespec="minutes"))
+    if precision not in ("minutes", "seconds"):
+        raise ValueError("precision must be minutes or seconds")
+    return _positions_at_ist(stamp.isoformat(timespec=precision))
