@@ -136,7 +136,10 @@ Use fresh active Dhan Data API subscription and local token in
 rolling option expiry/strike/side selections per up-to-30-day window,
 multiplied by both 1m and 5m**. A calendar quarter can require
 3–4 windows, so often 840–1,120 Dhan API calls. The preview prints
-the exact expected total. Every call is rate-spaced at least
+the exact expected total: on 2026-10-09 the January-2021-through-today
+plan has **21 eligible quarterly ZIPs, 76 bounded request windows and
+21,280 read-only calls** (140 expiry/offset/side combinations x
+2 intervals per window). Every call is rate-spaced at least
 0.25 seconds and uses bounded retries on 429/5xx.
 
 Each eligible quarter is archived as one file, then an MD5-verified
@@ -159,3 +162,16 @@ price gain, historical Gamma, or astrology/numerology influence.
 Accurate analysis needs a separately validated historical
 fixed-expiry source; keep a strong separation between rolling
 price-window research and genuine option contract backtests.
+
+### Safe reruns after an earlier quarter was uploaded
+
+The tool checks the remote's existing archive filenames before starting.
+After you upload e.g. `2021Q4` using `--quarter 2021Q4`, the later
+unrestricted backfill will **skip the already-present Q4 ZIP** rather than
+re-download its 1m/5m data or overwrite it. If its local ZIP was already
+removed after verification, the rerun can observe the remote MD5 but
+cannot compare the bytes to a no-longer-local ZIP; it labels this
+`EXISTING_REMOTE_ARCHIVE_UNVERIFIED_THIS_RUN`, **never a newly
+verified data coverage claim**. To independently verify historic
+remote ZIPs, download them or use an external attestation and inspect
+their manifest and integrity. Other quarters continue normally.
