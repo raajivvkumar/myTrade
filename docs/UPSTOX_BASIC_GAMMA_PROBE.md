@@ -19,6 +19,23 @@ Use your existing repo clone and open your personal private environment file:
     git pull --ff-only origin feature/gamma-investigation-no-archive
     python -m pip install -r requirements.txt
     python -m pytest -q tests/test_upstox_basic_history.py
+
+Windows-specific note (9 October 2026): previous smoke tests depended on
+pytest's default tmp_path fixture. Some Windows profiles deny listing
+%LOCALAPPDATA%/Temp/pytest-of-<user>, resulting in WinError 5 BEFORE the
+test body runs. The two smoke tests now create and clean up their own
+temporary workspace under the repository's tests folder, so they do not
+need access to the blocked system temp folder. Do not run the tests as
+Administrator or loosen Temp folder ACLs just to bypass this setup error.
+
+If running other, older tests still triggers a default-temp permission error,
+explicitly choose a dedicated writable pytest scratch location, for example:
+
+    python -m pytest -q --basetemp=./.pytest-local-tmp
+
+Never use the real MyTrade market-data archive as the pytest basetemp; pytest
+may delete or recreate its basetemp directory. The dedicated test scratch
+folder is disposable and should not be committed to Git.
     test -f .env || cp .env.example .env
     notepad .env
 
