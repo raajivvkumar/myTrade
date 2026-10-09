@@ -1,6 +1,8 @@
 """Five-year Dhan query planning tests; synthetic and offline only."""
 from datetime import date
+from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from app.research.dhan_direct_ram_study import queries
@@ -9,7 +11,47 @@ from app.research.five_year_ram_accumulators import StreamingRollingSummary
 from app.research.option_multiplier_event_scan import (
     scan_rolling_frame, summarize_scans,
 )
-from tests.test_option_multiplier_event_scan import bars, options, MockDhan
+def bars(n=100, jump=None):
+    frame = pd.DataFrame({
+        "timestamp": pd.date_range("2026-10-06 09:15", periods=n, freq="min"),
+        "actual_strike": 22400.0, "open": 10.0, "close": 10.0,
+        "high": 11.0, "low": 9.0, "volume": 10.0, "oi": 100.0,
+        "iv": 0.2, "spot": 22400.0,
+    })
+    if jump is not None:
+        frame.loc[jump, ["close", "high"]] = 200.0
+    return frame
+
+
+def options():
+    return SimpleNamespace(
+        from_date=date(2026, 10, 6), through=date(2026, 10, 6),
+        execute=False, full=False, max_requests=1, horizon=60,
+        min_price=2.0, pause=0.25, progress=False, max_examples=12,
+        vedic_astrology=False, vedic_transits=False,
+    )
+
+
+class MockDhan:
+    def __init__(self):
+        self.called = 0
+
+    def profile(self):
+        return {"dataPlan": "Active"}
+
+    def _call(self, method, path, payload):
+        self.called += 1
+        assert method == "POST" and path == "/charts/rollingoption"
+        candles = bars(n=120, jump=50)
+        base = int(pd.Timestamp(
+            "2026-10-06 09:15", tz="Asia/Kolkata").timestamp())
+        return {"data": {"ce": {
+            "timestamp": [base + 60 * i for i in range(len(candles))],
+            "strike": candles.actual_strike.tolist(),
+            **{key: candles[key].tolist()
+               for key in ("open", "high", "low", "close",
+                           "volume", "oi", "iv", "spot")}
+        }}}
 
 
 def five_year_opts(**overrides):
