@@ -59,7 +59,7 @@ def test_missing_oi_does_not_infer_positive_rule():
 
 def test_lookback_discontinuity_rejected():
     f = sample()
-    f.loc[90, "timestamp"] += pd.Timedelta(minutes=5)
+    f = f.drop(index=90).reset_index(drop=True)
     d = study_chunk(f)["2026-10-06"]
     assert d["excluded_past"] > 0
 
