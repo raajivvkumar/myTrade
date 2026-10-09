@@ -138,3 +138,26 @@ def test_empty_dhan_response_is_audited_without_failure(monkeypatch, tmp_path):
     assert report["empty_responses"] == 1
     assert report["rows_observed"] == 0
     assert not list(tmp_path.iterdir())
+
+
+
+def test_iv_spot_and_moneyness_precursors_are_reported_with_denominators():
+    single = study_chunk(sample(peak=200.))
+    summary = aggregate(single)
+    metrics = summary["descriptive_5m_precursor_comparison"]["10x"]
+    assert metrics["iv_change_5m"]["events_available"] > 0
+    assert metrics["spot_move_5m_pct"]["events_available"] > 0
+    assert metrics["strike_to_spot_pct"]["events_available"] > 0
+    assert metrics["iv_change_5m"]["event_mean"] == 0.0
+
+
+def test_missing_iv_and_spot_never_imputed():
+    frame = sample(peak=200.)
+    frame["iv"] = np.nan
+    frame["spot"] = np.nan
+    result = aggregate(study_chunk(frame))
+    metrics = result["descriptive_5m_precursor_comparison"]["10x"]
+    assert metrics["iv_change_5m"]["events_available"] == 0
+    assert metrics["iv_change_5m"]["event_mean"] is None
+    assert metrics["spot_move_5m_pct"]["events_available"] == 0
+    assert metrics["strike_to_spot_pct"]["event_mean"] is None
