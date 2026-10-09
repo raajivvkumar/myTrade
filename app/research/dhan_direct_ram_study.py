@@ -17,7 +17,7 @@ import pandas as pd
 
 from app.broker.dhan_cli import load_local_credentials
 from app.broker.dhan_historical import DhanClient, DhanAPIError, RollingQuery
-from app.broker.dhan_history import backward_windows, five_year_start, parse_bars
+from app.broker.dhan_history import backward_windows, five_year_start, parse_bars, VALIDATION_RULES
 
 LEVELS = (2, 3, 5, 10)
 RULES = ("momentum20", "volume2_momentum20", "volume2_oi10")
@@ -256,6 +256,8 @@ def run(args, client=None, sleeper=clock.sleep):
                                  "reason": type(error).__name__, "stage": stage}
             if isinstance(error, DhanAPIError):
                 report["failure"]["dhan"] = error.diagnostic()
+            elif stage == "VALIDATE_BARS" and str(error) in VALIDATION_RULES:
+                report["failure"]["validation_rule"] = str(error)
             break
         report["completed_api_requests"] += 1
         report["empty_responses"] += int(frame.empty)
