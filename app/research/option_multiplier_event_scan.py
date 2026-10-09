@@ -114,12 +114,25 @@ def _features(bars, index):
 
 
 def _first_prior_signal(bars, index, rule, lookback=15):
-    # The entry OPEN is not known concurrently with the entry bar CLOSE.
-    # Only consider signals ending before the entry minute.
+    # Entry is the OPEN of minute index. Signals may use only earlier closes.
     for i in range(max(15, index - lookback), index):
         record = _features(bars, i)
         if record is not None and record["signals"][rule] is True:
             return _minute(bars["timestamp"][i])
+    return None
+
+
+def _first_pre_crossing_sign(bars, index, crossing_index, rule):
+    """First observed signal strictly BEFORE crossing; retrospective only.
+
+    Signal may occur after the hypothetical entry, in which case it is
+    not an advance entry alert. Never label a crossing bar itself as a
+    predictive 'start sign'.
+    """
+    for i in range(max(15, index), crossing_index):
+        record = _features(bars, i)
+        if record is not None and record["signals"][rule] is True:
+            return i
     return None
 
 
@@ -221,6 +234,8 @@ def scan_rolling_frame(frame, *, series, side, horizon=60, min_price=2.0,
                     stats["episodes"][level_key] += 1
                     if len(stats["event_examples"][level_key]) >= max_examples:
                         continue
+                    pre_cross_index = _first_pre_crossing_sign(
+                        values, i, cross_idx, "premium20")
                     event = {
                         "day": str(day), "series": series, "side": side,
                         "rolling_strike": strike,
@@ -236,6 +251,12 @@ def scan_rolling_frame(frame, *, series, side, horizon=60, min_price=2.0,
                             values["close"][cross_idx]),
                         "first_prior_momentum20_sign_ist": _first_prior_signal(
                             values, i, "premium20"),
+                        "first_momentum20_sign_before_crossing_ist": (
+                            _minute(values["timestamp"][pre_cross_index])
+                            if pre_cross_index is not None else None),
+                        "minutes_from_momentum_sign_to_crossing": (
+                            cross_idx - pre_cross_index
+                            if pre_cross_index is not None else None),
                         "first_prior_volume2_momentum20_sign_ist":
                             _first_prior_signal(values, i, "volume2_premium20"),
                         "first_prior_volume2_oi10_sign_ist": _first_prior_signal(
@@ -252,6 +273,9 @@ def scan_rolling_frame(frame, *, series, side, horizon=60, min_price=2.0,
                             values["timestamp"][i])
                         event["vedic_at_first_crossing_bar"] = astrology_fn(
                             values["timestamp"][cross_idx])
+                        if pre_cross_index is not None:
+                            event["vedic_at_first_momentum20_sign"] = astrology_fn(
+                                values["timestamp"][pre_cross_index])
                     stats["event_examples"][level_key].append(event)
         outcome[str(day)] = stats
     return outcome
