@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from argparse import Namespace
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
+import os
+import tempfile
 
 import pytest
 
@@ -13,6 +16,24 @@ from app.broker import upstox_basic_history_cli as cli
 IST = ZoneInfo("Asia/Kolkata")
 DAY = "2026-10-07"
 INDEX = "NSE_INDEX|Nifty 50"
+
+
+@pytest.fixture
+def repo_test_workspace():
+    """Isolate files without relying on Windows's sometimes ACL-blocked %TEMP%.
+
+    The fixture's directory exists only for this test and is removed after
+    restoring the original working directory (required for Windows cleanup).
+    """
+    previous_cwd = Path.cwd()
+    with tempfile.TemporaryDirectory(
+        prefix=".mytrade-gamma-test-", dir=Path(__file__).resolve().parent
+    ) as directory:
+        os.chdir(directory)
+        try:
+            yield Path(directory)
+        finally:
+            os.chdir(previous_cwd)
 
 
 class FakeResponse:
@@ -180,18 +201,16 @@ def arg(**kwargs):
     return Namespace(**base)
 
 
-def test_cli_dry_run_does_not_contact_broker(monkeypatch, tmp_path, capsys):
-    monkeypatch.chdir(tmp_path)
+def test_cli_dry_run_does_not_contact_broker(monkeypatch, repo_test_workspace, capsys):
     monkeypatch.setattr(cli, "fetch_day_1m", lambda *a, **kw: (_ for _ in ()).throw(
         AssertionError("unwanted API call")
     ))
     assert cli.run(arg())["requests"] == 0
     assert "DRY RUN" in capsys.readouterr().out
-    assert not list(tmp_path.iterdir())
+    assert not list(repo_test_workspace.iterdir())
 
 
-def test_cli_option_probe_readonly_two_calls_no_archive(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
+def test_cli_option_probe_readonly_two_calls_no_archive(monkeypatch, repo_test_workspace):
     calls = []
     def resolve(*args, **kwargs):
         calls.append("chain")
@@ -211,7 +230,7 @@ def test_cli_option_probe_readonly_two_calls_no_archive(monkeypatch, tmp_path):
     assert result["status"] == "EMPTY"
     assert calls == ["chain", "candles"]
     assert result["requests"] == 2
-    assert not list(tmp_path.iterdir())
+    assert not list(repo_test_workspace.iterdir())
 
 
 def test_cli_future_date_rejected_before_option_api(monkeypatch):
