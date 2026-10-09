@@ -63,12 +63,12 @@ bash scripts/run_tests_gitbash.sh
 
 # Query plan only — zero Dhan calls and no token needed.
 python -m app.research.dhan_event_discovery_v3 \
-  --from-date 2026-09-01 --through 2026-10-09 --full
+  --from-date 2021-10-09 --through 2026-10-09 --full
 
 # Authenticated RAM-only pilot: SIX near-expiry ATM/ATM±1 CE/PE
 # calls in newest 30-day request block. Requires local Dhan token.
 python -m app.research.dhan_event_discovery_v3 \
-  --from-date 2026-09-01 \
+  --from-date 2021-10-09 \
   --through 2026-10-09 \
   --full --max-requests 6 \
   --horizon 60 --min-price 2 \
