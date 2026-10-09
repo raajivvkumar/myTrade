@@ -75,9 +75,10 @@ class StreamingRollingSummary:
                     if identifier in stats["sample_identifiers"]:
                         stats["duplicate_samples"] += 1
                         continue
-                    stats["sample_identifiers"].add(identifier)
-                    # Keep only the chronologically earliest N distinct
-                    # examples in memory; this does NOT discard counts.
+                    # Bound identifiers to retained examples. The count
+                    # of possible alias duplicates is therefore only from
+                    # the retained rolling sample, NOT the entire 5-year
+                    # event population.
                     if self.max_examples:
                         sample_list = stats["samples"]
                         sample_list.append(example)
@@ -85,6 +86,10 @@ class StreamingRollingSummary:
                             e["first_observed_crossing_close_ist"], e["series"]))
                         if len(sample_list) > self.max_examples:
                             sample_list.pop()
+                        stats["sample_identifiers"] = {
+                            (x["day"], x["side"], x["rolling_strike"],
+                             x["first_observed_crossing_close_ist"])
+                            for x in sample_list}
 
     def result(self):
         response = {
@@ -136,6 +141,7 @@ class StreamingRollingSummary:
             response["examples"][key] = {
                 "records": list(info["samples"]),
                 "potential_alias_coincidences_in_sample": info["duplicate_samples"],
+                "alias_duplicate_detection_scope": "RETAINED_EARLIEST_EXAMPLES_ONLY",
                 "examples_truncated": info["episodes"] > info["sample_count"],
             }
         return response
