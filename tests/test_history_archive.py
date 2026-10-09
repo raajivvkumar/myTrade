@@ -93,9 +93,10 @@ def test_offline_dashboard_browses_and_backtests_archive(monkeypatch, tmp_path):
     # A global block on socket.connect prevents the event loop from starting.
     # Keep external network connections blocked but allow local IPC.
     original_connect = socket.socket.connect
+    local_unix_family = getattr(socket, "AF_UNIX", None)
 
     def offline(sock, address):
-        if sock.family == socket.AF_UNIX:
+        if local_unix_family is not None and sock.family == local_unix_family:
             return original_connect(sock, address)
         if sock.family in (socket.AF_INET, socket.AF_INET6) and isinstance(address, tuple):
             try:
