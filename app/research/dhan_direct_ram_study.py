@@ -56,6 +56,8 @@ def empty_day():
             "event_examples": {str(level): [] for level in LEVELS},
             "moon_rashi_cohorts": {
                 str(level): {"event": {}, "other": {}} for level in LEVELS},
+            "strike_root_cohorts": {
+                str(level): {"event": {}, "other": {}} for level in LEVELS},
             "labeled": 0, "switches": 0,
             "feature_cohorts": {
                 str(level): {feature: {key: 0 for key in (
@@ -188,6 +190,12 @@ def study_chunk(frame, horizon=30, min_price=2.0,
                 continue
             ratio = float(forward.close.max()) / entry
             state["labeled"] += 1
+            from app.research.vedic_strike_transit_study import (
+                compound_number, date_numerology)
+            absolute_strike = float(pre.actual_strike.iloc[-1])
+            strike_numerology = (compound_number(absolute_strike)
+                                if absolute_strike.is_integer() else None)
+            day_numerology = date_numerology(day)
             astro_at_decision = astrology_fn(stamp) if astrology_fn else None
             moon_rashi = (astro_at_decision.get("planets", {}).get(
                 "Moon", {}).get("rashi") if astro_at_decision else None)
@@ -199,12 +207,19 @@ def study_chunk(frame, horizon=30, min_price=2.0,
                     cohort = state["moon_rashi_cohorts"][key][
                         "event" if truth else "other"]
                     cohort[moon_rashi] = cohort.get(moon_rashi, 0) + 1
+                if strike_numerology:
+                    cohort = state["strike_root_cohorts"][key][
+                        "event" if truth else "other"]
+                    root = str(strike_numerology["root_number"])
+                    cohort[root] = cohort.get(root, 0) + 1
                 if truth and len(state["event_examples"][key]) < 3:
                     crossed = forward[forward.close >= entry * threshold].iloc[0]
                     event = {
                         "threshold": f"{threshold}x",
                         "series": str(g.series.iloc[0]) if "series" in g else "UNVERIFIED",
-                        "actual_strike": float(pre.actual_strike.iloc[-1]),
+                        "actual_strike": absolute_strike,
+                        "strike_numerology": strike_numerology,
+                        "date_numerology": day_numerology,
                         "decision_time_ist": ist_minute(stamp),
                         "hypothetical_entry_time_ist": ist_minute(forward.timestamp.iloc[0]),
                         "first_observed_crossing_close_ist": ist_minute(crossed.timestamp),
@@ -255,9 +270,10 @@ def merge_day(dst, dates):
                 if len(current["event_examples"][key]) < 12:
                     current["event_examples"][key].append(example)
             for cohort in ("event", "other"):
-                for rashi, count in value["moon_rashi_cohorts"][key][cohort].items():
-                    group = current["moon_rashi_cohorts"][key][cohort]
-                    group[rashi] = group.get(rashi, 0) + count
+                for field in ("moon_rashi_cohorts", "strike_root_cohorts"):
+                    for category, count in value[field][key][cohort].items():
+                        group = current[field][key][cohort]
+                        group[category] = group.get(category, 0) + count
         for level in LEVELS:
             current["positives"][str(level)] += value["positives"][str(level)]
         for level in LEVELS:
@@ -334,6 +350,18 @@ def aggregate(dates):
                        for ex in day["event_examples"][str(level)]),
                       key=lambda ex: (ex["first_observed_crossing_close_ist"], ex["series"]),
                   )[:30] for level in LEVELS},
+              "strike_root_event_baseline": {
+                  f"{level}x": {
+                      root: {
+                          cohort: sum(day["strike_root_cohorts"][str(level)][cohort].get(
+                              root, 0) for day in dates.values())
+                          for cohort in ("event", "other")
+                      } for root in sorted({
+                          r for day in dates.values()
+                          for cohort in ("event", "other")
+                          for r in day["strike_root_cohorts"][str(level)][cohort]
+                      })
+                  } for level in LEVELS},
               "vedic_moon_rashi_at_decision": {
                   f"{level}x": {
                       label: {
