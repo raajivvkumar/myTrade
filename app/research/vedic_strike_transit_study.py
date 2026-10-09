@@ -235,6 +235,7 @@ def summarize_transit_impact(groups, *, max_samples=60):
     Counts may be correlated aliases; this is NOT an inferential significance test.
     """
     merged = []
+    transit_calendar = {}
     censored = {}
     instances = 0
     eligible = 0
@@ -242,6 +243,10 @@ def summarize_transit_impact(groups, *, max_samples=60):
         instances += group["total_transit_instances"]
         eligible += group["eligible_transit_strike_observations"]
         merged.extend(group["observations"])
+        for transition in group["transit_calendar"]:
+            key = (transition["calculated_transition_time_ist"],
+                   transition["planet"], transition["transition_type"])
+            transit_calendar.setdefault(key, transition)
         for reason, count in group["censored"].items():
             censored[reason] = censored.get(reason, 0) + count
     buckets = {}
@@ -298,7 +303,10 @@ def summarize_transit_impact(groups, *, max_samples=60):
         })
     exact_groups.sort(key=lambda x: (
         -x["observations"], x["planet"], x["strike_price"]))
+    transitions = [transit_calendar[k] for k in sorted(transit_calendar)]
     return {
+        "unique_session_planetary_transitions": len(transitions),
+        "session_planetary_transition_examples": transitions[:100],
         "transit_instances_across_aliases": instances,
         "eligible_strike_effect_windows": eligible,
         "censor_reasons": censored,
