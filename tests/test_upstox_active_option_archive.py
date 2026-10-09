@@ -222,3 +222,31 @@ def test_secret_token_not_logged_when_upstox_rejects(monkeypatch):
 def test_no_order_method():
     assert not hasattr(ActiveOptionClient, "place_order")
     assert not hasattr(ActiveOptionClient, "post")
+
+
+def test_backup_verification_after_expiry_never_needs_broker_token(tmp_path, monkeypatch):
+    from app.data.option_archive_verify import verify_active_archive
+    original = tmp_path / "primary"
+    copy = tmp_path / "offline"
+    archive_one_day(fake_frame(), contract(), DAY, source_dir=original, mirror_dir=copy)
+    monkeypatch.delenv("UPSTOX_ANALYTICS_TOKEN", raising=False)
+    result = verify_active_archive(original, copy)
+    assert result["pairs"] == 1
+    assert result["network_requests"] == 0
+    assert result["market_data_verified_against_exchange"] is False
+    assert result["token_required"] is False
+    backup_file = copy / target_path(original, contract(), DAY).relative_to(original)
+    backup_file.write_bytes(b"bad")
+    with pytest.raises(ValueError, match="SHA256 mismatch"):
+        verify_active_archive(original, copy)
+
+
+def test_verifier_detects_missing_independent_mirror(tmp_path):
+    from app.data.option_archive_verify import verify_active_archive
+    original = tmp_path / "primary"
+    copy = tmp_path / "offline"
+    archive_one_day(fake_frame(20), contract(), DAY, source_dir=original, mirror_dir=copy)
+    first = copy / target_path(original, contract(), DAY).relative_to(original)
+    first.unlink()
+    with pytest.raises(ValueError, match="Missing"):
+        verify_active_archive(original, copy)
