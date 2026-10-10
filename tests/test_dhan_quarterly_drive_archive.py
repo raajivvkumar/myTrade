@@ -167,6 +167,78 @@ def test_interrupted_quarter_retains_stage_and_resumes_without_duplicate_calls(
     assert not list(Path(args.staging).iterdir())
 
 
+def test_transient_network_error_is_retried_without_changing_candles():
+    request = RollingQuery(
+        TODAY, TODAY + timedelta(days=1),
+        expiry_flag="WEEK", expiry_code=1, strike="ATM",
+        side="CALL", interval=1)
+
+    class FailNetworkOnce(MockDhan):
+        def _call(self, method, path, payload):
+            if not self.calls:
+                self.calls.append(payload)
+                raise DhanAPIError("NETWORK_ERROR")
+            return super()._call(method, path, payload)
+
+    client = FailNetworkOnce()
+    waits = []
+    frame = archive._get_broker_frame(
+        client, request, "WEEK_1_ATM_CALL", waits.append, .35)
+    assert len(frame) == 3
+    assert len(client.calls) == 2
+    assert waits == [.35, 4]
+
+
+def test_authentication_error_is_not_retried():
+    request = RollingQuery(
+        TODAY, TODAY + timedelta(days=1),
+        expiry_flag="WEEK", expiry_code=1, strike="ATM",
+        side="CALL", interval=1)
+    client = MockDhan(fail_on=1)
+    waits = []
+    with pytest.raises(DhanAPIError) as error:
+        archive._get_broker_frame(
+            client, request, "WEEK_1_ATM_CALL", waits.append, .35)
+    assert error.value.http_status == 401
+    assert len(client.calls) == 1
+    assert waits == [.35]
+
+
+def test_network_retry_exhaustion_keeps_completed_partial_and_resumes(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "_each_query", two_requests)
+
+    class FailNetworkAfterFirst(MockDhan):
+        def _call(self, method, path, payload):
+            if self.calls:
+                self.calls.append(payload)
+                raise DhanAPIError("NETWORK_ERROR")
+            return super()._call(method, path, payload)
+
+    args = options(tmp_path)
+    args.execute = True
+    interrupted = FailNetworkAfterFirst()
+    stopped = archive.run(
+        args, client=interrupted, sleeper=lambda _: None,
+        verify_remote=False, uploader=lambda *_: "UPLOADED_MD5_VERIFIED")
+    assert stopped["status"] == "STOPPED_PARTIAL_LOCAL_STAGING_RETAINED"
+    assert stopped["failure"]["dhan"]["reason"] == "NETWORK_ERROR"
+    assert len(interrupted.calls) == 5  # one success + four bounded retries
+    partials = list((tmp_path / "stage").glob("*.partial"))
+    assert len(partials) == 1
+    with zipfile.ZipFile(partials[0]) as z:
+        assert len([n for n in z.namelist() if n.startswith("meta/")]) == 1
+
+    resumed = MockDhan()
+    report = archive.run(
+        args, client=resumed, sleeper=lambda _: None,
+        verify_remote=False, uploader=lambda *_: "UPLOADED_MD5_VERIFIED")
+    assert report["status"] == "ALL_SELECTED_QUARTERS_UPLOADED"
+    assert report["archived_quarters"][0]["new_calls"] == 1
+    assert len(resumed.calls) == 1
+    assert not list((tmp_path / "stage").iterdir())
+
+
 def test_rejects_historically_unavailable_quarter(tmp_path):
     args = options(tmp_path)
     args.quarter = "2021Q1"
