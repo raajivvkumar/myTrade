@@ -202,14 +202,16 @@ def _each_query(q, intervals):
 
 
 def _get_broker_frame(client, request, series, sleeper, delay):
-    # Retry only transient rate-limit/provider failures. 401/403 must be
-    # resolved by refreshing local credentials, not by indefinite retries.
+    # Read-only requests may safely retry network and 429/5xx failures.
+    # Never retry 401/403, malformed data, or unrelated broker errors.
     for attempt in range(4):
         sleeper(delay if attempt == 0 else min(30, 2 ** (attempt + 1)))
         try:
             raw = client._call("POST", "/charts/rollingoption", request.payload())
         except DhanAPIError as exc:
-            if exc.http_status not in (429, 500, 502, 503, 504) or attempt == 3:
+            transient = (exc.category == "NETWORK_ERROR" or
+                         exc.http_status in (429, 500, 502, 503, 504))
+            if not transient or attempt == 3:
                 raise
             continue
         return _validated_frame(raw, request, series)
